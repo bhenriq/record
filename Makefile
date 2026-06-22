@@ -1,5 +1,5 @@
 CFLAGS  = -Wall -Wextra -Os -g
-LDFLAGS = -framework CoreAudio -framework Foundation
+LDFLAGS = -framework CoreAudio -framework AudioToolbox -framework Foundation
 CC      = cc
 
 capture: capture.m

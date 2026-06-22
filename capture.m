@@ -219,15 +219,21 @@ static void writeLoop(int duration) {
         if (sysFrames > 0) {
             ringRead(&gSysRing, sysBuf, sysFrames * 2);
 
-            // ---- Read corresponding mic data, pad with silence if short ----
-            uint32_t micRead = ringRead(&gMicRing, micBuf, sysFrames);
-            for (uint32_t i = micRead; i < sysFrames; i++)
-                micBuf[i] = 0.0f;
+            // ---- Read all available mic samples (don't limit to sysFrames) ----
+            uint32_t micAvail = ringAvailable(&gMicRing);
+            if (micAvail > MAX_TICK_FRAMES) micAvail = MAX_TICK_FRAMES;
+            uint32_t micRead = ringRead(&gMicRing, micBuf, micAvail);
 
             // ---- Mix: L = system (stereo → mono), R = mic ----
+            // If mic sample rate differs from sys rate, we map mic samples
+            // to output frames using nearest-neighbour interpolation
+            // (sample-and-hold). This keeps the R channel continuous and at
+            // the correct playback speed regardless of the rate ratio.
             for (uint32_t i = 0; i < sysFrames; i++) {
                 float L = (sysBuf[i * 2] + sysBuf[i * 2 + 1]) * 0.5f;
-                float R = micBuf[i];
+                float R = (micRead > 0)
+                    ? micBuf[(uint32_t)((float)i * micRead / sysFrames)]
+                    : 0.0f;
                 // Clamp
                 if      (L >  1.0f) L =  1.0f;
                 else if (L < -1.0f) L = -1.0f;
@@ -403,7 +409,7 @@ int main(int argc, char **argv) {
                 if (asbd.mSampleRate != gSampleRate) {
                     fprintf(stderr,
                         "warning: mic rate (%.0f Hz) differs from sys rate (%.0f Hz)\n"
-                        "         — R channel may have dropouts\n",
+                        "         — R channel will use sample-and-hold upsampling\n",
                         asbd.mSampleRate, gSampleRate);
                 }
 
@@ -506,7 +512,7 @@ int main(int argc, char **argv) {
                 if (bestRate != gSampleRate) {
                     fprintf(stderr,
                         "warning: mic rate (%.0f Hz) differs from sys rate (%.0f Hz)\n"
-                        "         — R channel may have dropouts\n",
+                        "         — R channel will use sample-and-hold upsampling\n",
                         bestRate, gSampleRate);
                 }
 

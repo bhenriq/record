@@ -345,68 +345,135 @@ int main(int argc, char **argv) {
         }
     }
 
-    // ---- Find best microphone device (prefer built‑in) ----
+    // ---- Find microphone device: use the system's default input device ----
     {
-        // Enumerate all audio devices
-        AudioObjectPropertyAddress addr = {
-            kAudioHardwarePropertyDevices,
+        AudioObjectPropertyAddress defaultAddr = {
+            kAudioHardwarePropertyDefaultInputDevice,
             kAudioObjectPropertyScopeGlobal,
             kAudioObjectPropertyElementMain
         };
-        UInt32 dataSize = 0;
-        AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, NULL, &dataSize);
-        AudioObjectID *devices = malloc(dataSize);
-        AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, &dataSize, devices);
-        UInt32 devCount = dataSize / sizeof(AudioObjectID);
-
-        AudioObjectID bestDevice = 0;
-        uint32_t     bestScore  = 0;
-        uint32_t     bestChan   = 0;
-        Float64      bestRate   = 0;
-        char         bestName[256] = "";
-
-        for (UInt32 i = 0; i < devCount; i++) {
-            AudioObjectID dev = devices[i];
-
-            // Check input-channel count
+        AudioObjectID defaultDev = 0;
+        UInt32 dsize = sizeof(defaultDev);
+        OSStatus err = AudioObjectGetPropertyData(kAudioObjectSystemObject,
+                                                   &defaultAddr, 0, NULL,
+                                                   &dsize, &defaultDev);
+        if (err == noErr && defaultDev != 0) {
+            // Verify it has input channels
             AudioObjectPropertyAddress inAddr = {
                 kAudioDevicePropertyStreamConfiguration,
                 kAudioObjectPropertyScopeInput,
                 kAudioObjectPropertyElementMain
             };
             UInt32 bufSize = 0;
-            AudioObjectGetPropertyDataSize(dev, &inAddr, 0, NULL, &bufSize);
+            AudioObjectGetPropertyDataSize(defaultDev, &inAddr, 0, NULL, &bufSize);
             AudioBufferList *buflist = malloc(bufSize);
-            AudioObjectGetPropertyData(dev, &inAddr, 0, NULL, &bufSize, buflist);
+            AudioObjectGetPropertyData(defaultDev, &inAddr, 0, NULL, &bufSize, buflist);
             UInt32 inCh = 0;
             for (UInt32 j = 0; j < buflist->mNumberBuffers; j++)
                 inCh += buflist->mBuffers[j].mNumberChannels;
             free(buflist);
-            if (inCh == 0) continue;
 
-            // Transport type
-            AudioObjectPropertyAddress tAddr = {
-                kAudioDevicePropertyTransportType,
+            if (inCh > 0) {
+                // Read sample rate for warning
+                AudioObjectPropertyAddress fmtAddr = {
+                    kAudioDevicePropertyStreamFormat,
+                    kAudioObjectPropertyScopeInput,
+                    kAudioObjectPropertyElementMain
+                };
+                AudioStreamBasicDescription asbd = {};
+                UInt32 fs = sizeof(asbd);
+                AudioObjectGetPropertyData(defaultDev, &fmtAddr, 0, NULL, &fs, &asbd);
+
+                // Device name
+                char devName[256] = "";
+                AudioObjectPropertyAddress nAddr = {
+                    kAudioDevicePropertyDeviceName,
+                    kAudioObjectPropertyScopeGlobal,
+                    kAudioObjectPropertyElementMain
+                };
+                UInt32 ns = sizeof(devName) - 1;
+                AudioObjectGetPropertyData(defaultDev, &nAddr, 0, NULL, &ns, &devName);
+
+                gMicID = defaultDev;
+                gMicChannels = inCh;
+
+                printf("mic: %s (%u ch, %.0f Hz)  [default input device]\n",
+                       devName, (unsigned)inCh, asbd.mSampleRate);
+
+                if (asbd.mSampleRate != gSampleRate) {
+                    fprintf(stderr,
+                        "warning: mic rate (%.0f Hz) differs from sys rate (%.0f Hz)\n"
+                        "         — R channel may have dropouts\n",
+                        asbd.mSampleRate, gSampleRate);
+                }
+
+                err = AudioDeviceCreateIOProcID(gMicID, micIOProc, NULL, &gMicIOProcID);
+                if (err != noErr) {
+                    fprintf(stderr, "warning: could not open mic device — mic will be silent\n");
+                    gMicID = 0;
+                    gMicChannels = 0;
+                }
+            } else {
+                fprintf(stderr, "warning: default input device has no input channels — mic will be silent\n");
+            }
+        }
+
+        // Fallback: scan all devices if there's no default input device
+        if (!gMicID) {
+            AudioObjectPropertyAddress addr = {
+                kAudioHardwarePropertyDevices,
                 kAudioObjectPropertyScopeGlobal,
                 kAudioObjectPropertyElementMain
             };
-            UInt32 transport = 0;
-            UInt32 ts = sizeof(transport);
-            AudioObjectGetPropertyData(dev, &tAddr, 0, NULL, &ts, &transport);
+            UInt32 dataSize = 0;
+            AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, NULL, &dataSize);
+            AudioObjectID *devices = malloc(dataSize);
+            AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, &dataSize, devices);
+            UInt32 devCount = dataSize / sizeof(AudioObjectID);
 
-            // Sample rate
-            AudioObjectPropertyAddress fmtAddr = {
-                kAudioDevicePropertyStreamFormat,
-                kAudioObjectPropertyScopeInput,
-                kAudioObjectPropertyElementMain
-            };
-            AudioStreamBasicDescription asbd = {};
-            UInt32 fs = sizeof(asbd);
-            AudioObjectGetPropertyData(dev, &fmtAddr, 0, NULL, &fs, &asbd);
+            AudioObjectID bestDevice = 0;
+            uint32_t     bestScore  = 0;
+            uint32_t     bestChan   = 0;
+            Float64      bestRate   = 0;
+            char         bestName[256] = "";
 
-            // Device name (C string)
-            char devName[256] = "";
-            {
+            for (UInt32 i = 0; i < devCount; i++) {
+                AudioObjectID dev = devices[i];
+
+                AudioObjectPropertyAddress inAddr = {
+                    kAudioDevicePropertyStreamConfiguration,
+                    kAudioObjectPropertyScopeInput,
+                    kAudioObjectPropertyElementMain
+                };
+                UInt32 bufSize = 0;
+                AudioObjectGetPropertyDataSize(dev, &inAddr, 0, NULL, &bufSize);
+                AudioBufferList *buflist = malloc(bufSize);
+                AudioObjectGetPropertyData(dev, &inAddr, 0, NULL, &bufSize, buflist);
+                UInt32 inCh = 0;
+                for (UInt32 j = 0; j < buflist->mNumberBuffers; j++)
+                    inCh += buflist->mBuffers[j].mNumberChannels;
+                free(buflist);
+                if (inCh == 0) continue;
+
+                AudioObjectPropertyAddress tAddr = {
+                    kAudioDevicePropertyTransportType,
+                    kAudioObjectPropertyScopeGlobal,
+                    kAudioObjectPropertyElementMain
+                };
+                UInt32 transport = 0;
+                UInt32 ts = sizeof(transport);
+                AudioObjectGetPropertyData(dev, &tAddr, 0, NULL, &ts, &transport);
+
+                AudioObjectPropertyAddress fmtAddr = {
+                    kAudioDevicePropertyStreamFormat,
+                    kAudioObjectPropertyScopeInput,
+                    kAudioObjectPropertyElementMain
+                };
+                AudioStreamBasicDescription asbd = {};
+                UInt32 fs = sizeof(asbd);
+                AudioObjectGetPropertyData(dev, &fmtAddr, 0, NULL, &fs, &asbd);
+
+                char devName[256] = "";
                 AudioObjectPropertyAddress nAddr = {
                     kAudioDevicePropertyDeviceName,
                     kAudioObjectPropertyScopeGlobal,
@@ -414,45 +481,43 @@ int main(int argc, char **argv) {
                 };
                 UInt32 ns = sizeof(devName) - 1;
                 AudioObjectGetPropertyData(dev, &nAddr, 0, NULL, &ns, &devName);
+
+                uint32_t score = 0;
+                if (transport == kAudioDeviceTransportTypeBuiltIn) score += 100;
+                if (asbd.mSampleRate == gSampleRate)              score += 50;
+                if (asbd.mSampleRate >= 48000)                    score += 10;
+
+                if (score > bestScore) {
+                    bestDevice = dev;
+                    bestScore  = score;
+                    bestChan   = inCh;
+                    bestRate   = asbd.mSampleRate;
+                    strncpy(bestName, devName, sizeof(bestName) - 1);
+                }
             }
+            free(devices);
 
-            // Score: built‑in >> matches sys rate >> high rate
-            uint32_t score = 0;
-            if (transport == kAudioDeviceTransportTypeBuiltIn) score += 100;
-            if (asbd.mSampleRate == gSampleRate)              score += 50;
-            if (asbd.mSampleRate >= 48000)                    score += 10;
+            if (bestDevice) {
+                gMicID = bestDevice;
+                gMicChannels = bestChan;
+                printf("mic: %s (%u ch, %.0f Hz)  [fallback scan]\n",
+                       bestName, (unsigned)bestChan, bestRate);
 
-            if (score > bestScore) {
-                bestDevice = dev;
-                bestScore  = score;
-                bestChan   = inCh;
-                bestRate   = asbd.mSampleRate;
-                strncpy(bestName, devName, sizeof(bestName) - 1);
-            }
-        }
-        free(devices);
+                if (bestRate != gSampleRate) {
+                    fprintf(stderr,
+                        "warning: mic rate (%.0f Hz) differs from sys rate (%.0f Hz)\n"
+                        "         — R channel may have dropouts\n",
+                        bestRate, gSampleRate);
+                }
 
-        gMicID = bestDevice;
-        gMicChannels = bestChan;
-
-        if (!gMicID) {
-            fprintf(stderr, "warning: no input device found — mic will be silent\n");
-        } else {
-            printf("mic: %s (%u ch, %.0f Hz)\n",
-                   bestName, (unsigned)bestChan, bestRate);
-
-            if (bestRate != gSampleRate) {
-                fprintf(stderr,
-                    "warning: mic rate (%.0f Hz) differs from sys rate (%.0f Hz)\n"
-                    "         — R channel may have dropouts\n",
-                    bestRate, gSampleRate);
-            }
-
-            OSStatus err = AudioDeviceCreateIOProcID(gMicID, micIOProc, NULL, &gMicIOProcID);
-            if (err != noErr) {
-                fprintf(stderr, "warning: could not open mic device — mic will be silent\n");
-                gMicID = 0;
-                gMicChannels = 0;
+                err = AudioDeviceCreateIOProcID(gMicID, micIOProc, NULL, &gMicIOProcID);
+                if (err != noErr) {
+                    fprintf(stderr, "warning: could not open mic device — mic will be silent\n");
+                    gMicID = 0;
+                    gMicChannels = 0;
+                }
+            } else {
+                fprintf(stderr, "warning: no input device found — mic will be silent\n");
             }
         }
     }

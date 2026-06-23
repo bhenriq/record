@@ -38,114 +38,23 @@ rec - macOS System Audio + Microphone Recorder
 
 Usage:
   rec [options]                          Full pipeline (capture → mix → transcribe → summarize)
-  rec capture [options]                  Capture raw WAVs from system + mic
-  rec mix <sys.wav> <mic.wav> <out>      Mix two WAVs to stereo (.wav or .m4a)
-  rec transcribe [options]               Transcribe existing WAVs (reads sys.wav + mic.wav)
-  rec summarize [options]                Create markdown summary from transcript
+  rec capture [options]                  Capture raw WAVs
+  rec mix <sys.wav> <mic.wav> <out>      Mix to stereo (.wav or .m4a)
+  rec transcribe [options]               Transcribe with speaker labels
+  rec summarize [options]                AI summary in markdown
 
-── Full pipeline ──────────────────────────────────────────────────────
-Records system audio + microphone, mixes to stereo, transcribes both
-sources with speaker labels, then generates an AI title and summary.
-
-Scratch files in $TMPDIR/rec.<uuid>/      → mic.wav  sys.wav  mix.wav  transcript.txt
-Final deliverables in ~/Documents/Recordings/  → YYYY-MM-DD_title.m4a  YYYY-MM-DD_title.md
-
-Flags:
+Options:
   -d <secs>       Recording duration (default: until Ctrl+C)
-  -m              Interactively select microphone input device
-  -o <name>       Session name, used as fallback filename if AI title is unavailable
-  --txt           Plain text transcript (default)
-  --srt           SRT subtitle format
-  --vtt           WebVTT subtitle format
-  --json          JSON with word timestamps
-  --censor        Redact sensitive words in transcript
-  --locale <L>    Locale for speech recognition (e.g. fr-FR, de-DE)
-  --output-dir <path>  Output directory (default: ~/Documents/Recordings/, or $REC_DIR)
-  --keep-temp     Preserve scratch WAVs in temp dir after run
-  -h, --help      Show this help
-
-Examples:
-  rec -d 30
-  rec -d 10 -m --srt --censor
-  rec -d 300 -o my-meeting --output-dir ~/Desktop
-  rec --keep-temp
-
-── rec capture ────────────────────────────────────────────────────────
-Captures system audio and microphone to separate WAV files.
-Output files are written to a temp dir (or --output-dir if specified).
-
-  -o <name>       Output base name → <name>_system.wav  <name>_mic.wav
-  -d <secs>       Recording duration (default: until Ctrl+C)
-  -m              Interactively select microphone input device
-  --output-dir <path>  Output directory (default: temp dir)
-  --keep-temp     Preserve WAVs after capture
-  -h, --help      Show this help
-
-Examples:
-  rec capture -d 10
-  rec capture -d 5 -m -o meeting
-  rec capture --output-dir . -o test
-
-── rec mix ────────────────────────────────────────────────────────────
-Reads a system WAV and a mic WAV, resamples to match sample rates,
-detects and corrects clock drift, and produces a stereo mix:
-  left channel  = microphone
-  right channel = system audio (summed to mono)
-
-Output format is auto-detected from the file extension:
-  .wav → stereo WAV (16-bit PCM)
-  .m4a → AAC in M4A container (via afconvert, no extra deps)
-
-Usage: rec mix <system.wav> <mic.wav> <output.wav|.m4a>
-
-Examples:
-  rec mix sys.wav mic.wav mix.wav
-  rec mix sys.wav mic.wav mix.m4a
-
-── rec transcribe ─────────────────────────────────────────────────────
-Transcribes system and mic WAVs independently using yap, then merges
-segments chronologically with speaker labels (Me / Them).
-
-Input files (defaults can be overridden via flags):
-  ./<name>_system.wav    or    --sys <path>
-  ./<name>_mic.wav       or    --mic <path>
-
-Output: ./<name>_transcript.<ext>
-
-Flags:
-  -o <name>       Base name for input/output files (default: output)
-  --sys <path>    Explicit path to system WAV (overrides -o)
-  --mic <path>    Explicit path to mic WAV (overrides -o)
-  --txt           Plain text transcript (default)
-  --srt           SRT subtitle format
-  --vtt           WebVTT subtitle format
-  --json          JSON with word timestamps
-  --censor        Redact sensitive words in transcript
-  --locale <L>    Locale for speech recognition (e.g. fr-FR)
-  -h, --help      Show this help
-
-Examples:
-  rec transcribe
-  rec transcribe -o meeting --srt
-  rec transcribe --sys system.wav --mic mic.wav --json
-
-── rec summarize ──────────────────────────────────────────────────────
-Creates a markdown file with an AI-generated title and summary (via pi)
-followed by the full transcript with speaker labels.
-
-Input:  ./<name>_transcript.txt  or  --input <path>
-Output: <output-dir>/YYYY-MM-DD_title.md
-
-Flags:
-  -o <name>       Base name for input file (default: output)
-  --input <path>  Explicit path to transcript file (overrides -o)
+  -m              Interactively select microphone
+  -o <name>       Session name
+  --txt|--srt|--vtt|--json  Transcript format (default: txt)
+  --censor        Redact sensitive words
+  --locale <L>    Locale (e.g. fr-FR)
   --output-dir <path>  Output directory (default: ~/Documents/Recordings/)
+  --keep-temp     Preserve scratch WAVs after run
   -h, --help      Show this help
 
-Examples:
-  rec summarize
-  rec summarize -o meeting
-  rec summarize --input transcript.txt --output-dir .
+Run 'rec <subcommand> --help' for detailed help with file paths and examples.
 """)
 }
 

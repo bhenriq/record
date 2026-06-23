@@ -117,8 +117,8 @@ func summarize(config: SummarizeConfig) throws {
 
 private func runPi(input: String) throws -> String {
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/local/bin/pi")
-    process.arguments = ["-p"]
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["pi", "-p"]
 
     let stdinPipe = Pipe()
     let stdoutPipe = Pipe()
@@ -140,7 +140,11 @@ private func runPi(input: String) throws -> String {
     \(input)
     """
 
-    try process.run()
+    do {
+        try process.run()
+    } catch {
+        throw RecError.general("'pi' not found. Install: npm install -g @earendil-works/pi-coding-agent")
+    }
 
     // Write input
     stdinPipe.fileHandleForWriting.write(prompt.data(using: .utf8)!)

@@ -1,0 +1,384 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.rec-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "fileList" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/sources",
+      "importPath" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Capture.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Errors.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Mixer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Summarize.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Transcribe.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Types.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/main.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/CBridge.build/RingBuffer.c.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/CBridge.build/TapBridge.m.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "rec",
+      "moduleOutputPath" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/Modules/rec.swiftmodule",
+      "objects" : [
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Capture.swift.o",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Errors.swift.o",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Mixer.swift.o",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Summarize.swift.o",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Transcribe.swift.o",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Types.swift.o",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/main.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j8",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-Xcc",
+        "-fmodule-map-file=/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/CBridge.build/module.modulemap",
+        "-Xcc",
+        "-I",
+        "-Xcc",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/CBridge/include",
+        "-module-cache-path",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "rec_main",
+        "-swift-version",
+        "5",
+        "-I",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-L",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-plugin-path",
+        "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "record"
+      ],
+      "outputFileMapPath" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Capture.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Errors.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Mixer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Summarize.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Transcribe.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Types.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/Modules/rec.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Capture.swift",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Errors.swift",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Mixer.swift",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Summarize.swift",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Transcribe.swift",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Types.swift",
+        "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/main.swift"
+      ],
+      "tempsPath" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "rec" : [
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "-module-name",
+      "rec",
+      "-package-name",
+      "record",
+      "-c",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Capture.swift",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Errors.swift",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Mixer.swift",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Summarize.swift",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Transcribe.swift",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Types.swift",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/main.swift",
+      "-I",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j8",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-Xcc",
+      "-fmodule-map-file=/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/CBridge.build/module.modulemap",
+      "-Xcc",
+      "-I",
+      "-Xcc",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/CBridge/include",
+      "-module-cache-path",
+      "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "rec_main",
+      "-swift-version",
+      "5",
+      "-I",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-L",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-plugin-path",
+      "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "record",
+      "-driver-use-frontend-path",
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "CBridge" : [
+
+    ],
+    "rec" : [
+      "CBridge"
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec-entitlement.plist"
+    },
+    "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Capture.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Errors.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Mixer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Summarize.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Transcribe.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/Types.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/rec/main.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/sources"
+    },
+    "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/CBridge.build/RingBuffer.c.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/CBridge.build/TapBridge.m.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Capture.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Errors.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Mixer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Summarize.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Transcribe.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/Types.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.build/main.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/rec.product/Objects.LinkFileList"
+    },
+    "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+    }
+  }
+}

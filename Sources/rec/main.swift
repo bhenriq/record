@@ -256,7 +256,13 @@ func runFullPipeline(_ args: [String]) {
         trConfig.format = opts.format
         trConfig.censor = opts.censor
         trConfig.locale = opts.locale
-        try transcribe(config: trConfig)
+        do {
+            try transcribe(config: trConfig)
+        } catch {
+            print("Transcription failed: \(error)", to: &stderr)
+            print("  Install yap: brew install yap", to: &stderr)
+            print("  Then run:    rec transcribe -o \(opts.baseName)", to: &stderr)
+        }
 
         print("\nAll done.", to: &stderr)
         print("  WAV:        \(opts.baseName).wav", to: &stderr)

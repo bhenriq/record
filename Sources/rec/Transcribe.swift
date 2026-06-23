@@ -15,8 +15,8 @@ struct YapTranscript: Codable {
 
 struct YapMetadata: Codable {
     let created: String
-    var duration: Double
-    let language: String
+    var duration: Double?
+    let language: String?
 }
 
 struct YapSegment: Codable {
@@ -141,7 +141,7 @@ func transcribe(config: TranscribeConfig) throws {
         let micData = try Data(contentsOf: URL(fileURLWithPath: micJsonPath))
         var micYap = try JSONDecoder().decode(YapTranscript.self, from: micData)
         // Adjust timestamps
-        micYap.metadata.duration *= ratio
+        if micYap.metadata.duration != nil { micYap.metadata.duration! *= ratio }
         for i in micYap.segments.indices {
             micYap.segments[i].start *= ratio
             micYap.segments[i].end *= ratio
@@ -170,14 +170,18 @@ private func runYap(input: String, output: String, censor: Bool, locale: String?
     args += [input, "-o", output]
 
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/local/bin/yap")
-    process.arguments = args
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["yap"] + args
 
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = pipe
 
-    try process.run()
+    do {
+        try process.run()
+    } catch {
+        throw RecError.general("'yap' not found. Install: brew install yap")
+    }
     process.waitUntilExit()
 
     guard process.terminationStatus == 0 else {
@@ -198,10 +202,15 @@ private func getWavFrameCount(path: String) throws -> Int {
 
 private func mergeTranscripts(system sys: YapTranscript, mic: YapTranscript, ratio: Double) -> MergedResult {
     let created = sys.metadata.created
-    let sysDuration = sys.metadata.duration
-    let micDurationAdjusted = mic.metadata.duration * ratio
+    let sysDuration = sys.metadata.duration ?? 0
+    let micDurationAdjusted = (mic.metadata.duration ?? 0) * ratio
     let duration = max(sysDuration, micDurationAdjusted)
-    let language = sys.metadata.language.isEmpty ? "unknown" : sys.metadata.language
+    let language: String
+    if let lang = sys.metadata.language, !lang.isEmpty {
+        language = lang
+    } else {
+        language = "unknown"
+    }
 
     var segments: [MergedSegment] = []
 

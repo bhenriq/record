@@ -3,7 +3,7 @@
 // Subcommands:
 //   rec [options]               — full pipeline (capture → mix → transcribe → summarize)
 //   rec capture [options]       — just capture
-//   rec mix <sys> <mic> <out>   — just mix
+//   rec mix <sys> <mic> <out>   — just mix (.wav or .m4a)
 //   rec transcribe [options]    — just transcribe
 //   rec summarize [options]     — just summarize
 //
@@ -36,12 +36,12 @@ func printUsage() {
     print("""
 Usage: rec [options]                     Full pipeline: capture -> mix -> transcribe -> summarize
        rec capture [options]             Just capture
-       rec mix <sys.wav> <mic.wav> <out> Just mix tracks to stereo
+       rec mix <sys.wav> <mic.wav> <out> Mix tracks to stereo (.wav or .m4a)
        rec transcribe [options]          Just transcribe existing WAVs
        rec summarize [options]           Create markdown summary from transcript
 
 Full-pipeline options:
-  -o <name>       Session name (used in auto-generated filenames; default: timestamp)
+  -o <name>       Session name (used in fallback filename)
   -d <secs>       Recording duration (default: until Ctrl+C)
   -m              Interactively select microphone
   --txt           Plain text transcript (default)
@@ -58,7 +58,7 @@ Examples:
   rec -d 30
   rec -d 10 -m --srt
   rec capture -d 5 -m
-  rec mix sys.wav mic.wav out.wav
+  rec mix sys.wav mic.wav mix.m4a
   rec transcribe --json
   rec summarize
 """)
@@ -253,6 +253,7 @@ func runFullPipeline(_ args: [String]) {
     try? FileManager.default.createDirectory(atPath: finalDir, withIntermediateDirectories: true)
 
     var success = false
+    var mixedWav = ""  // set after mix step
     defer {
         if !success && !opts.keepTemp {
             print("  (scratch files left in \(tempDir))", to: &stderr)
@@ -265,8 +266,6 @@ func runFullPipeline(_ args: [String]) {
     let sysWav  = "\(tempDir)/sys.wav"
     let micWav  = "\(tempDir)/mic.wav"
     let mixWav  = "\(tempDir)/mix.wav"
-    let mixMp3  = "\(tempDir)/mix.mp3"
-    let mixM4a  = "\(tempDir)/mix.m4a"
     let transcriptTxt = "\(tempDir)/transcript.txt"
 
     do {
@@ -274,29 +273,14 @@ func runFullPipeline(_ args: [String]) {
         print("=== Step 1: Capture ===", to: &stderr)
         try CaptureEngine.capture(sysWavPath: sysWav, micWavPath: micWav, duration: opts.duration, interactiveMic: opts.interactiveMic)
 
-        // ======== Step 2: Mix + encode ========
+        // ======== Step 2: Mix (WAV only — encoding happens after summarize) ========
         print("\n=== Step 2: Mix ===", to: &stderr)
-        do {
-            let sysWavFile = try WavFile.read(path: sysWav)
-            let micWavFile = try WavFile.read(path: micWav)
-            let result = try mix(system: sysWavFile, mic: micWavFile)
-            try result.writeWav(path: mixWav)
-            print("Done: \(mixWav)", to: &stderr)
-
-            // Encode to compressed format (temp, will be renamed after summarize)
-            switch encodeAudio(wavPath: mixWav, outputBase: "\(tempDir)/mix") {
-            case .mp3(let path):
-                print("Encoded: \(path) (MP3)", to: &stderr)
-            case .m4a(let path):
-                print("Encoded: \(path) (AAC)", to: &stderr)
-            case .skipped(let reason):
-                print("Skipped encoding: \(reason)", to: &stderr)
-                print("  Install lame: brew install lame", to: &stderr)
-            }
-        } catch {
-            print("Mix failed, continuing to transcribe: \(error)", to: &stderr)
-            print("  (mix is optional — the WAV files are still available)", to: &stderr)
-        }
+        let sysWavFile = try WavFile.read(path: sysWav)
+        let micWavFile = try WavFile.read(path: micWav)
+        let result = try mix(system: sysWavFile, mic: micWavFile)
+        try result.writeWav(path: mixWav)
+        mixedWav = mixWav
+        print("Done: \(mixWav)", to: &stderr)
 
         // ======== Step 3: Transcribe ========
         print("\n=== Step 3: Transcribe ===", to: &stderr)
@@ -304,7 +288,6 @@ func runFullPipeline(_ args: [String]) {
         trConfig.format = opts.format
         trConfig.censor = opts.censor
         trConfig.locale = opts.locale
-        // Point to the short-named WAVs in the temp dir
         trConfig.systemWavOverride = sysWav
         trConfig.micWavOverride = micWav
         trConfig.transcriptOverride = transcriptTxt
@@ -330,7 +313,7 @@ func runFullPipeline(_ args: [String]) {
             print("  Then run:   rec summarize", to: &stderr)
         }
 
-        // ======== Finalize: move audio to final dir with proper name ========
+        // ======== Step 5: Encode to final .m4a with proper name ========
         let dateStr: String = {
             let fmt = DateFormatter()
             fmt.dateFormat = "yyyy-MM-dd"
@@ -347,45 +330,30 @@ func runFullPipeline(_ args: [String]) {
         } else if !opts.baseName.isEmpty {
             finalStem = "\(dateStr)_\(opts.baseName)"
         } else {
-            // Fallback: timestamp
             let fmt = DateFormatter()
             fmt.dateFormat = "HHmmss"
             let timeStr = fmt.string(from: Date())
             finalStem = "\(dateStr)_\(timeStr)"
         }
 
-        // Move MP3 or M4A to final dir
-        let compressedSrc: String
-        let compressedExt: String
-        if FileManager.default.fileExists(atPath: mixMp3) {
-            compressedSrc = mixMp3
-            compressedExt = "mp3"
-        } else if FileManager.default.fileExists(atPath: mixM4a) {
-            compressedSrc = mixM4a
-            compressedExt = "m4a"
-        } else {
-            compressedSrc = ""
-            compressedExt = ""
-        }
+        let finalAudioExt = "m4a"
+        let finalAudioPath = "\(finalDir)/\(finalStem).\(finalAudioExt)"
 
-        var finalAudioPath = ""
-        if !compressedSrc.isEmpty {
-            finalAudioPath = "\(finalDir)/\(finalStem).\(compressedExt)"
-            try? FileManager.default.moveItem(atPath: compressedSrc, toPath: finalAudioPath)
-        }
-
-        // Also move the mix WAV if compressed failed
-        if finalAudioPath.isEmpty && FileManager.default.fileExists(atPath: mixWav) {
-            finalAudioPath = "\(finalDir)/\(finalStem).wav"
-            try? FileManager.default.copyItem(atPath: mixWav, toPath: finalAudioPath)
+        if !mixedWav.isEmpty && FileManager.default.fileExists(atPath: mixedWav) {
+            if encodeToAAC(wavPath: mixedWav, outputPath: finalAudioPath) {
+                print("Encoded: \(finalAudioPath) (AAC)", to: &stderr)
+            } else {
+                // Fallback: copy WAV
+                let fallbackWav = "\(finalDir)/\(finalStem).wav"
+                try? FileManager.default.copyItem(atPath: mixedWav, toPath: fallbackWav)
+                print("Encoding failed, copied WAV: \(fallbackWav)", to: &stderr)
+            }
         }
 
         success = true
 
         print("\nAll done.", to: &stderr)
-        if !finalAudioPath.isEmpty {
-            print("  Audio:      \(finalAudioPath)", to: &stderr)
-        }
+        print("  Audio:      \(finalAudioPath)", to: &stderr)
         if !generatedTitle.isEmpty {
             let safeTitle = generatedTitle
                 .lowercased()
@@ -430,7 +398,6 @@ func runCapture(_ args: [String]) {
         }
     }
 
-    // Write to temp dir by default, or to specified dir
     let outDir: String
     if let dir = outputDir {
         outDir = (dir as NSString).expandingTildeInPath
@@ -459,7 +426,7 @@ func runCapture(_ args: [String]) {
 
 func runMix(_ args: [String]) {
     guard args.count >= 3 else {
-        print("Usage: rec mix <system.wav> <mic.wav> <output.wav>", to: &stderr)
+        print("Usage: rec mix <system.wav> <mic.wav> <output.wav|.m4a>", to: &stderr)
         exit(1)
     }
     let sysPath = args[0]
@@ -467,12 +434,7 @@ func runMix(_ args: [String]) {
     let outPath = args[2]
 
     do {
-        let sysWav = try WavFile.read(path: sysPath)
-        let micWav = try WavFile.read(path: micPath)
-        let result = try mix(system: sysWav, mic: micWav)
-        try result.writeWav(path: outPath)
-        print("Done: \(outPath)", to: &stderr)
-        print("  \(result.frameCount) frames, \(Int(result.sampleRate)) Hz", to: &stderr)
+        try mixToFile(sysPath: sysPath, micPath: micPath, outputPath: outPath)
     } catch {
         print("Error: \(error)", to: &stderr)
         exit(1)

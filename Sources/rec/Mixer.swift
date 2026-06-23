@@ -287,3 +287,41 @@ extension MixResult {
     }
 
 }
+
+// MARK: - Extension-based output
+
+/// Mix system and mic WAVs and write to a file, auto-detecting output format
+/// from the file extension.
+/// - `.wav` → stereo WAV
+/// - `.m4a` → AAC in M4A container
+/// - Other → WAV (with a warning)
+func mixToFile(sysPath: String, micPath: String, outputPath: String) throws {
+    let sysWav = try WavFile.read(path: sysPath)
+    let micWav = try WavFile.read(path: micPath)
+    let result = try mix(system: sysWav, mic: micWav)
+
+    let ext = (outputPath as NSString).pathExtension.lowercased()
+
+    switch ext {
+    case "m4a":
+        // Mix to temp WAV, then encode
+        let tempWav = "\(NSTemporaryDirectory())rec_mix_temp_\(ProcessInfo().globallyUniqueString).wav"
+        defer { try? FileManager.default.removeItem(atPath: tempWav) }
+        try result.writeWav(path: tempWav)
+        if encodeToAAC(wavPath: tempWav, outputPath: outputPath) {
+            print("Done: \(outputPath) (AAC)", to: &stderr)
+        } else {
+            // Fallback: copy WAV with .wav extension
+            let fallback = (outputPath as NSString).deletingPathExtension + ".wav"
+            try result.writeWav(path: fallback)
+            print("Encoding failed, wrote WAV: \(fallback)", to: &stderr)
+        }
+    default:
+        // .wav or unknown → write WAV
+        try result.writeWav(path: outputPath)
+        print("Done: \(outputPath)", to: &stderr)
+    }
+
+    print("  \(result.frameCount) frames, \(Int(result.sampleRate)) Hz", to: &stderr)
+}
+

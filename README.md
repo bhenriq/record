@@ -5,7 +5,7 @@ system audio + microphone on macOS 14.2+.  One command gives you a compressed
 stereo audio file (mic left, system right), a speaker-labeled transcript,
 and an AI-generated markdown summary.
 
-- **No external audio dependencies** — CoreAudio capture, built-in AAC/MP3 encoding
+- **No external audio dependencies** — CoreAudio capture, built-in AAC encoding via `afconvert`
 - **No kernel extensions** — uses process tap + aggregate device
 - **Lock-free ring buffers** — real-time safe audio IOProc threads
 - **Zero runtime deps for capture + mix** — only needs `yap` for transcription
@@ -15,7 +15,7 @@ and an AI-generated markdown summary.
 
 ```sh
 swift run rec -d 10             # record 10 seconds → ~/Documents/Recordings/
-play ~/Documents/Recordings/2026-06-23_*.mp3
+play ~/Documents/Recordings/2026-06-23_*.m4a
 ```
 
 Or install the built binary somewhere on your `PATH`:
@@ -32,7 +32,7 @@ rec -d 10
 - **Xcode Command Line Tools** (`xcode-select --install`)
 - **yap** — on-device speech transcription (`brew install yap`)
 - **pi** — AI-powered summarization (`npm install -g @earendil-works/pi-coding-agent`)
-- **lame** — MP3 encoding (`brew install lame`; falls back to built-in AAC via `afconvert`)
+- **afconvert** — built-in, always available on macOS (no brew install needed)
 
 All other dependencies are built-in macOS frameworks (CoreAudio, AudioToolbox, Accelerate).
 
@@ -63,7 +63,7 @@ rec --keep-temp                              # preserve scratch WAVs after run
 ```sh
 rec capture -d 10                            # just capture raw WAVs
 rec capture -d 5 -m                          # capture with interactive mic selection
-rec mix sys.wav mic.wav mix.wav              # mix two WAVs to stereo
+rec mix sys.wav mic.wav mix.m4a             # mix to AAC stereo (or .wav)
 rec transcribe --json                        # transcribe existing WAVs
 rec summarize                                # create summary from latest transcript
 ```
@@ -87,15 +87,15 @@ cleaned up on success.  Final deliverables go to `~/Documents/Recordings/`
 |-------|-----------|------------|
 | Capture | `sys.wav`, `mic.wav` | — |
 | Mix | `mix.wav` | — |
-| Encode | `mix.mp3` | `YYYY-MM-DD_title.mp3` |
+| Encode | — | `YYYY-MM-DD_title.m4a` |
 | Transcribe | `transcript.txt` | — (embedded in markdown) |
 | Summarize | — | `YYYY-MM-DD_title.md` |
 
 ### Naming
 
-- **With AI summary**: `2026-06-23_meeting_notes.mp3` + `.md` (title from pi)
-- **Session name fallback** (`-o meeting`): `2026-06-23_meeting.mp3`
-- **Timestamp fallback**: `2026-06-23_143022.mp3`
+- **With AI summary**: `2026-06-23_meeting_notes.m4a` + `.md` (title from pi)
+- **Session name fallback** (`-o meeting`): `2026-06-23_meeting.m4a`
+- **Timestamp fallback**: `2026-06-23_143022.m4a`
 
 ### Configuration
 
@@ -118,7 +118,7 @@ cleaned up on success.  Final deliverables go to `~/Documents/Recordings/`
 5. **Mix**: Reads both WAVs, detects clock drift by sample-count ratio,
    resamples mic to match system rate (linear interpolation), stretches
    mic to match system duration, and mixes to stereo (mic left, system right).
-6. **Encode**: Encodes to MP3 via `lame` (or M4A/AAC via `afconvert`).
+6. **Encode**: Encodes to AAC in M4A container via `afconvert` (built into macOS).
 7. **Transcribe**: Runs `yap transcribe` on each source, merges segments
    chronologically with speaker labels (Me / Them), applies drift correction.
 8. **Summarize**: Sends transcript to `pi -p` for AI title + summary,
@@ -159,7 +159,7 @@ Sources/
     Mixer.swift         WAV mixing + drift correction
     Transcribe.swift    yap-based transcription with speaker labels
     Summarize.swift     pi-based AI summarization
-    Encode.swift        MP3/AAC encoding via lame/afconvert
+    Encode.swift        AAC encoding via afconvert
     Errors.swift        Error types
     Types.swift         Shared types + output directory helpers
 ```

@@ -7,3 +7,5 @@ capture.dSYM/
 *_transcript.*
 test.json
 *.swp
+.build/
+*.o

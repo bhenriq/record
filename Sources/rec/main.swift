@@ -236,14 +236,26 @@ func runFullPipeline(_ args: [String]) {
         print("=== Step 1: Capture ===", to: &stderr)
         try CaptureEngine.capture(baseName: opts.baseName, duration: opts.duration, interactiveMic: opts.interactiveMic)
 
-        // Step 2: Mix
+        // Step 2: Mix + encode
         print("\n=== Step 2: Mix ===", to: &stderr)
         do {
             let sysWav = try WavFile.read(path: "\(opts.baseName)_system.wav")
             let micWav = try WavFile.read(path: "\(opts.baseName)_mic.wav")
             let result = try mix(system: sysWav, mic: micWav)
-            try result.writeWav(path: "\(opts.baseName).wav")
-            print("Done: \(opts.baseName).wav", to: &stderr)
+            let wavPath = "\(opts.baseName).wav"
+            try result.writeWav(path: wavPath)
+            print("Done: \(wavPath)", to: &stderr)
+
+            // Encode to compressed format (MP3 or M4A)
+            switch encodeAudio(wavPath: wavPath, outputBase: opts.baseName) {
+            case .mp3(let path):
+                print("Encoded: \(path) (MP3)", to: &stderr)
+            case .m4a(let path):
+                print("Encoded: \(path) (AAC)", to: &stderr)
+            case .skipped(let reason):
+                print("Skipped encoding: \(reason)", to: &stderr)
+                print("  Install lame: brew install lame", to: &stderr)
+            }
         } catch {
             print("Mix failed, continuing to transcribe: \(error)", to: &stderr)
             print("  (mix is optional — the WAV files are still available)", to: &stderr)
@@ -264,8 +276,20 @@ func runFullPipeline(_ args: [String]) {
             print("  Then run:    rec transcribe -o \(opts.baseName)", to: &stderr)
         }
 
+        // Step 4: Summarize (optional, requires pi)
+        print("\n=== Step 4: Summarize ===", to: &stderr)
+        var summaryConfig = SummarizeConfig()
+        summaryConfig.baseName = opts.baseName
+        do {
+            try summarize(config: summaryConfig)
+        } catch {
+            print("Summarization skipped: \(error)", to: &stderr)
+            print("  Install pi: npm install -g @earendil-works/pi-coding-agent", to: &stderr)
+            print("  Then run:   rec summarize -o \(opts.baseName)", to: &stderr)
+        }
+
         print("\nAll done.", to: &stderr)
-        print("  WAV:        \(opts.baseName).wav", to: &stderr)
+        print("  Audio:      \(opts.baseName).wav", to: &stderr)
         print("  Transcript: \(opts.baseName)_transcript.\(opts.format.rawValue)", to: &stderr)
     } catch {
         print("Error: \(error)", to: &stderr)

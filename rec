@@ -342,6 +342,95 @@ rec_transcribe() {
 }
 
 # ==============================================================
+#  rec summarize  —  create markdown summary from transcript via pi
+# ==============================================================
+rec_summarize() {
+    local base="output"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o)       base="$2"; shift 2 ;;
+            -h|--help)
+                echo "Usage: rec summarize [-o base]" >&2
+                echo "Create a markdown summary with transcript from an existing transcript." >&2
+                return 0
+                ;;
+            *) echo "rec summarize: unknown option $1" >&2; return 1 ;;
+        esac
+    done
+
+    local transcript="${base}_transcript.txt"
+
+    [[ -f "$transcript" ]] || die "transcript not found: $transcript"
+    [[ -s "$transcript" ]] || die "transcript is empty: $transcript"
+
+    has pi || die "'pi' not found. Install: npm install -g @earendil-works/pi-coding-agent"
+    has jq  || die "'jq' not found. Install: brew install jq"
+
+    echo "Reading transcript: $transcript" >&2
+    echo "Generating summary and title with pi..." >&2
+
+    local pi_output
+    pi_output=$(cat "$transcript" | pi -p \
+        "Read this conversation transcript and output a JSON object with exactly two keys:
+- \"title\": a short title (5 words or less) for this conversation
+- \"summary\": a concise 2-3 paragraph summary
+
+Output ONLY valid JSON, no other text or markdown formatting.
+Example: {\"title\": \"Team Standup Notes\", \"summary\": \"The team discussed progress on the project.\"}") || die "pi summarization failed"
+
+    # Strip markdown code fences if pi wrapped the JSON
+    local json_str="$pi_output"
+    if echo "$json_str" | grep -q '```'; then
+        json_str=$(echo "$json_str" | sed -n '/^```/d; /^{/,/^}/p' | tr -d '\n')
+    fi
+
+    local title summary
+    title=$(echo "$json_str" | jq -r '.title' 2>/dev/null) || die "failed to parse title from pi output"
+    summary=$(echo "$json_str" | jq -r '.summary' 2>/dev/null) || die "failed to parse summary from pi output"
+
+    [[ -z "$title" ]] && die "could not extract title from transcript"
+    [[ -z "$summary" ]] && die "could not extract summary from transcript"
+
+    # Sanitize title for filename: lowercase, spaces to underscores, remove special chars
+    local filename_title
+    filename_title=$(echo "$title" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9]/_/g' \
+        | sed 's/_\+/_/g' \
+        | sed 's/^_//;s/_$//')
+    [[ -z "$filename_title" ]] && filename_title="transcript"
+
+    local date_str
+    date_str=$(date +%Y-%m-%d)
+
+    local md_file="${date_str}_${filename_title}.md"
+
+    echo "Title: $title" >&2
+    echo "Output: $md_file" >&2
+
+    # Write markdown file with summary + nicely formatted transcript
+    {
+        echo "# $title"
+        echo
+        echo "**Date:** $(date '+%B %d, %Y')"
+        echo
+        echo "---"
+        echo
+        echo "$summary"
+        echo
+        echo "---"
+        echo
+        echo "## Transcript"
+        echo
+        # Format with bold speaker labels
+        cat "$transcript" | sed -E 's/^(Me|Them): /**\1:** /'
+    } > "$md_file"
+
+    echo "Done: $md_file" >&2
+}
+
+# ==============================================================
 #  rec  —  main dispatch
 # ==============================================================
 rec() {
@@ -349,7 +438,7 @@ rec() {
         -h|--help)
             rec_help
             ;;
-        capture|mix|transcribe)
+        capture|mix|transcribe|summarize)
             local cmd="$1"; shift
             # Intercept -h/--help for subcommands (the binary may not support it)
             if [[ "$#" -gt 0 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
@@ -357,6 +446,7 @@ rec() {
                     capture)   echo "Usage: rec capture [-o base] [-d secs] [-m]" >&2; return 0 ;;
                     mix)       echo "Usage: rec mix <system.wav> <mic.wav> <output.mp3>" >&2; return 0 ;;
                     transcribe) echo "Usage: rec transcribe [-o base] [--txt|--srt|--vtt|--json] [--censor] [--locale L]" >&2; return 0 ;;
+                    summarize) echo "Usage: rec summarize [-o base]" >&2; return 0 ;;
                 esac
             fi
             "rec_$cmd" "$@"
@@ -377,6 +467,7 @@ Usage:
   rec capture [OPTS]                   Just capture (calls ./capture)
   rec mix <sys.wav> <mic.wav> <out>    Just mix tracks to stereo MP3 (mic left, system right)
   rec transcribe [OPTS]                Just transcribe existing WAVs
+  rec summarize [OPTS]                 Create markdown summary from transcript via pi
 
 Full-pipeline options:
   -o <base>       Output base name (default: output)
@@ -397,6 +488,8 @@ Examples:
   rec capture -d 5 -m           Just capture
   rec mix sys.wav mic.wav out.mp3
   rec transcribe -o meeting --json
+  rec summarize                  Create markdown from output_transcript.txt
+  rec summarize -o meeting       Use meeting_transcript.txt as input
 EOF
 }
 
@@ -465,6 +558,7 @@ if [[ -n "${ZSH_VERSION:-}" ]]; then
             'capture:Record system audio and microphone'
             'mix:Mix system and mic tracks into stereo MP3 (mic left, system right)'
             'transcribe:Transcribe recordings with speaker labels'
+            'summarize:Create markdown summary from transcript via pi'
         )
 
         if (( CURRENT == 2 )); then
@@ -494,6 +588,10 @@ if [[ -n "${ZSH_VERSION:-}" ]]; then
                     '--json[JSON format]' \
                     '--censor[enable word censoring]' \
                     '--locale[locale]:locale:'
+                ;;
+            summarize)
+                _arguments -s \
+                    {-o,-output}'[output base name]:filename:'
                 ;;
             *)
                 _arguments -s \

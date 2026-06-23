@@ -103,7 +103,7 @@ Without `-m`, the default system input device is used automatically.
 If no microphone is available (e.g. Mac Mini with no input device), the
 mic file will contain silence and a warning is printed.
 
-## Mixing — `rec mix` / `mix.sh`
+## Mixing — `rec mix`
 
 Produces a stereo MP3 from the two WAV files, correcting clock drift automatically.
 The microphone goes to the **left channel**, system audio to the **right channel** —
@@ -111,10 +111,9 @@ so you can pan left/right to isolate either source.
 
 ```sh
 rec mix output_system.wav output_mic.wav output.mp3
-# or: ./mix.sh output_system.wav output_mic.wav output.mp3
 ```
 
-`mix.sh` (and `rec mix`) automatically:
+`rec mix` automatically:
 
 1. **Detects clock drift** by comparing the sample counts of both tracks
 2. **Corrects drift** using SoX's `tempo -s` (pitch-preserving, optimised for speech)
@@ -122,7 +121,7 @@ rec mix output_system.wav output_mic.wav output.mp3
 4. **Assigns channels** — mic → left, system → right
 5. **Encodes to MP3** at 128 kbps, 48 kHz, stereo
 
-## Transcription — `rec transcribe` / `transcribe.sh`
+## Transcription — `rec transcribe`
 
 Creates a speaker-labeled transcript from the two WAV files:
 
@@ -232,11 +231,9 @@ After `compinit`, pressing `Tab` after `rec ` offers subcommands (`capture`,
 
 | File | Purpose |
 |------|---------|
-| `rec` | Unified entry point (functions + zsh completions) |
+| `rec` | Swiss‑army knife: capture, mix, transcribe, zsh completions |
 | `capture.m` | CoreAudio recorder (Objective-C source) |
 | `capture` | Compiled binary |
-| `mix.sh` | Thin wrapper around `rec mix` |
-| `transcribe.sh` | Thin wrapper around `rec transcribe` |
 | `Makefile` | Builds `capture` from source |
 
 ## License

@@ -6,7 +6,7 @@
 //   mic file    — mono microphone at the mic's native sample rate
 //
 // No mixing, no sample-rate conversion, no real-time drift compensation.
-// Align and mix the two files in post-processing (see mix.sh).
+// Align and mix the two files in post-processing (rec mix).
 //
 // Build:   cc -o capture capture.m -framework CoreAudio -framework Foundation
 // Run:     ./capture                              -> output_system.wav + output_mic.wav

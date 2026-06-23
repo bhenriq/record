@@ -34,33 +34,118 @@ struct GlobalOptions {
 
 func printUsage() {
     print("""
-Usage: rec [options]                     Full pipeline: capture -> mix -> transcribe -> summarize
-       rec capture [options]             Just capture
-       rec mix <sys.wav> <mic.wav> <out> Mix tracks to stereo (.wav or .m4a)
-       rec transcribe [options]          Just transcribe existing WAVs
-       rec summarize [options]           Create markdown summary from transcript
+rec - macOS System Audio + Microphone Recorder
 
-Full-pipeline options:
-  -o <name>       Session name (used in fallback filename)
+Usage:
+  rec [options]                          Full pipeline (capture → mix → transcribe → summarize)
+  rec capture [options]                  Capture raw WAVs from system + mic
+  rec mix <sys.wav> <mic.wav> <out>      Mix two WAVs to stereo (.wav or .m4a)
+  rec transcribe [options]               Transcribe existing WAVs (reads sys.wav + mic.wav)
+  rec summarize [options]                Create markdown summary from transcript
+
+── Full pipeline ──────────────────────────────────────────────────────
+Records system audio + microphone, mixes to stereo, transcribes both
+sources with speaker labels, then generates an AI title and summary.
+
+Scratch files in $TMPDIR/rec.<uuid>/      → mic.wav  sys.wav  mix.wav  transcript.txt
+Final deliverables in ~/Documents/Recordings/  → YYYY-MM-DD_title.m4a  YYYY-MM-DD_title.md
+
+Flags:
   -d <secs>       Recording duration (default: until Ctrl+C)
-  -m              Interactively select microphone
+  -m              Interactively select microphone input device
+  -o <name>       Session name, used as fallback filename if AI title is unavailable
+  --txt           Plain text transcript (default)
+  --srt           SRT subtitle format
+  --vtt           WebVTT subtitle format
+  --json          JSON with word timestamps
+  --censor        Redact sensitive words in transcript
+  --locale <L>    Locale for speech recognition (e.g. fr-FR, de-DE)
+  --output-dir <path>  Output directory (default: ~/Documents/Recordings/, or $REC_DIR)
+  --keep-temp     Preserve scratch WAVs in temp dir after run
+  -h, --help      Show this help
+
+Examples:
+  rec -d 30
+  rec -d 10 -m --srt --censor
+  rec -d 300 -o my-meeting --output-dir ~/Desktop
+  rec --keep-temp
+
+── rec capture ────────────────────────────────────────────────────────
+Captures system audio and microphone to separate WAV files.
+Output files are written to a temp dir (or --output-dir if specified).
+
+  -o <name>       Output base name → <name>_system.wav  <name>_mic.wav
+  -d <secs>       Recording duration (default: until Ctrl+C)
+  -m              Interactively select microphone input device
+  --output-dir <path>  Output directory (default: temp dir)
+  --keep-temp     Preserve WAVs after capture
+  -h, --help      Show this help
+
+Examples:
+  rec capture -d 10
+  rec capture -d 5 -m -o meeting
+  rec capture --output-dir . -o test
+
+── rec mix ────────────────────────────────────────────────────────────
+Reads a system WAV and a mic WAV, resamples to match sample rates,
+detects and corrects clock drift, and produces a stereo mix:
+  left channel  = microphone
+  right channel = system audio (summed to mono)
+
+Output format is auto-detected from the file extension:
+  .wav → stereo WAV (16-bit PCM)
+  .m4a → AAC in M4A container (via afconvert, no extra deps)
+
+Usage: rec mix <system.wav> <mic.wav> <output.wav|.m4a>
+
+Examples:
+  rec mix sys.wav mic.wav mix.wav
+  rec mix sys.wav mic.wav mix.m4a
+
+── rec transcribe ─────────────────────────────────────────────────────
+Transcribes system and mic WAVs independently using yap, then merges
+segments chronologically with speaker labels (Me / Them).
+
+Input files (defaults can be overridden via flags):
+  ./<name>_system.wav    or    --sys <path>
+  ./<name>_mic.wav       or    --mic <path>
+
+Output: ./<name>_transcript.<ext>
+
+Flags:
+  -o <name>       Base name for input/output files (default: output)
+  --sys <path>    Explicit path to system WAV (overrides -o)
+  --mic <path>    Explicit path to mic WAV (overrides -o)
   --txt           Plain text transcript (default)
   --srt           SRT subtitle format
   --vtt           WebVTT subtitle format
   --json          JSON with word timestamps
   --censor        Redact sensitive words in transcript
   --locale <L>    Locale for speech recognition (e.g. fr-FR)
-  --output-dir <D> Output directory for finalized files (default: ~/Documents/Recordings/)
-  --keep-temp     Preserve scratch WAV files after successful run
   -h, --help      Show this help
 
 Examples:
-  rec -d 30
-  rec -d 10 -m --srt
-  rec capture -d 5 -m
-  rec mix sys.wav mic.wav mix.m4a
-  rec transcribe --json
+  rec transcribe
+  rec transcribe -o meeting --srt
+  rec transcribe --sys system.wav --mic mic.wav --json
+
+── rec summarize ──────────────────────────────────────────────────────
+Creates a markdown file with an AI-generated title and summary (via pi)
+followed by the full transcript with speaker labels.
+
+Input:  ./<name>_transcript.txt  or  --input <path>
+Output: <output-dir>/YYYY-MM-DD_title.md
+
+Flags:
+  -o <name>       Base name for input file (default: output)
+  --input <path>  Explicit path to transcript file (overrides -o)
+  --output-dir <path>  Output directory (default: ~/Documents/Recordings/)
+  -h, --help      Show this help
+
+Examples:
   rec summarize
+  rec summarize -o meeting
+  rec summarize --input transcript.txt --output-dir .
 """)
 }
 
@@ -390,8 +475,24 @@ func runCapture(_ args: [String]) {
         case "--output-dir": outputDir = args[safe: i + 1]; i += 2
         case "--keep-temp": keepTemp = true; i += 1
         case "-h", "--help":
-            print("Usage: rec capture [-o base] [-d secs] [-m] [--output-dir D] [--keep-temp]")
-            print("  Record system audio + microphone to separate WAV files")
+            print("""
+Usage: rec capture [options]
+
+Captures system audio and microphone to separate WAV files.
+Writes to a temp dir (or --output-dir if specified).
+
+Flags:
+  -o <name>       Output base name → <name>_system.wav  <name>_mic.wav
+  -d <secs>       Recording duration (default: until Ctrl+C)
+  -m              Interactively select microphone input device
+  --output-dir <path>  Output directory (default: temp dir)
+  --keep-temp     Preserve WAVs after capture
+
+Examples:
+  rec capture -d 10
+  rec capture -d 5 -m -o meeting
+  rec capture --output-dir . -o test
+""")
             return
         default:
             print("rec capture: unknown option \(args[i])", to: &stderr); exit(1)
@@ -425,8 +526,29 @@ func runCapture(_ args: [String]) {
 }
 
 func runMix(_ args: [String]) {
+    if args.contains("-h") || args.contains("--help") {
+        print("""
+Usage: rec mix <system.wav> <mic.wav> <output.wav|.m4a>
+
+Reads two WAV files, resamples to match sample rates, detects and
+corrects clock drift, and produces a stereo mix.
+
+  left channel  = microphone
+  right channel = system audio (summed to mono)
+
+Output format is auto-detected from extension:
+  .wav → stereo WAV (16-bit PCM)
+  .m4a → AAC in M4A container
+
+Examples:
+  rec mix sys.wav mic.wav mix.wav
+  rec mix sys.wav mic.wav mix.m4a
+""")
+        return
+    }
     guard args.count >= 3 else {
         print("Usage: rec mix <system.wav> <mic.wav> <output.wav|.m4a>", to: &stderr)
+        print("Run 'rec mix --help' for details.", to: &stderr)
         exit(1)
     }
     let sysPath = args[0]
@@ -447,6 +569,8 @@ func runTranscribe(_ args: [String]) {
     while i < args.count {
         switch args[i] {
         case "-o": config.baseName = args[safe: i + 1] ?? "output"; i += 2
+        case "--sys": config.systemWavOverride = args[safe: i + 1]; i += 2
+        case "--mic": config.micWavOverride = args[safe: i + 1]; i += 2
         case "--txt": config.format = .txt; i += 1
         case "--srt": config.format = .srt; i += 1
         case "--vtt": config.format = .vtt; i += 1
@@ -454,7 +578,34 @@ func runTranscribe(_ args: [String]) {
         case "--censor": config.censor = true; i += 1
         case "--locale": config.locale = args[safe: i + 1]; i += 2
         case "-h", "--help":
-            print("Usage: rec transcribe [-o base] [--txt|--srt|--vtt|--json] [--censor] [--locale L]")
+            print("""
+Usage: rec transcribe [options]
+
+Transcribes system and mic WAVs independently using yap, then merges
+segments chronologically with speaker labels (Me / Them).
+
+Input files (defaults can be overridden):
+  ./<name>_system.wav    or    --sys <path>
+  ./<name>_mic.wav       or    --mic <path>
+
+Output: ./<name>_transcript.<ext>
+
+Flags:
+  -o <name>       Base name for input/output files (default: output)
+  --sys <path>    Explicit path to system WAV
+  --mic <path>    Explicit path to mic WAV
+  --txt           Plain text transcript (default)
+  --srt           SRT subtitle format
+  --vtt           WebVTT subtitle format
+  --json          JSON with word timestamps
+  --censor        Redact sensitive words in transcript
+  --locale <L>    Locale for speech recognition (e.g. fr-FR)
+
+Examples:
+  rec transcribe
+  rec transcribe -o meeting --srt
+  rec transcribe --sys system.wav --mic mic.wav --json
+""")
             return
         default:
             print("rec transcribe: unknown option \(args[i])", to: &stderr); exit(1)
@@ -474,9 +625,28 @@ func runSummarize(_ args: [String]) {
     while i < args.count {
         switch args[i] {
         case "-o": config.baseName = args[safe: i + 1] ?? "output"; i += 2
+        case "--input": config.transcriptOverride = args[safe: i + 1]; i += 2
+        case "--output-dir": config.outputDir = args[safe: i + 1] ?? "."; i += 2
         case "-h", "--help":
-            print("Usage: rec summarize [-o base]")
-            print("  Create a markdown summary with transcript from an existing transcript file.")
+            print("""
+Usage: rec summarize [options]
+
+Creates a markdown file with an AI-generated title and summary (via pi)
+followed by the full transcript with bold speaker labels.
+
+Input:  ./<name>_transcript.txt  or  --input <path>
+Output: <output-dir>/YYYY-MM-DD_title.md
+
+Flags:
+  -o <name>       Base name for input file (default: output)
+  --input <path>  Explicit path to transcript file
+  --output-dir <path>  Output directory (default: ~/Documents/Recordings/)
+
+Examples:
+  rec summarize
+  rec summarize -o meeting
+  rec summarize --input transcript.txt --output-dir .
+""")
             return
         default:
             print("rec summarize: unknown option \(args[i])", to: &stderr); exit(1)

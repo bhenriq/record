@@ -528,8 +528,12 @@ extension CaptureEngine {
 @available(macOS 14.2, *)
 extension CaptureEngine {
     /// Run capture: set up tap + mic, record, tear down.
-    /// Returns the final data sizes for the WAV headers.
-    static func capture(baseName: String, duration: Int, interactiveMic: Bool) throws {
+    /// - Parameters:
+    ///   - sysWavPath: Path for the system audio WAV file.
+    ///   - micWavPath:  Path for the microphone WAV file.
+    ///   - duration:    Recording duration in seconds (0 = until Ctrl+C).
+    ///   - interactiveMic: If true, show a menu to choose the mic device.
+    static func capture(sysWavPath: String, micWavPath: String, duration: Int = 0, interactiveMic: Bool = false) throws {
         let engine = CaptureEngine.shared
 
         // Init ring buffers
@@ -567,9 +571,7 @@ extension CaptureEngine {
         }
 
         // Open output files
-        let sysPath = "\(baseName)_system.wav"
-        let micPath = "\(baseName)_mic.wav"
-        try engine.openWavFiles(sysPath: sysPath, micPath: micPath)
+        try engine.openWavFiles(sysPath: sysWavPath, micPath: micWavPath)
 
         // Start audio
         try engine.startAudio()
@@ -578,7 +580,7 @@ extension CaptureEngine {
         signal(SIGINT) { _ in CaptureEngine.shared.running = false }
         signal(SIGTERM) { _ in CaptureEngine.shared.running = false }
 
-        print("\nrecording  ⇢  \(sysPath)  and  \(micPath)   [Ctrl+C to stop]", to: &stderr)
+        print("\nrecording  ⇢  \(sysWavPath)  and  \(micWavPath)   [Ctrl+C to stop]", to: &stderr)
         Darwin.fflush(__stderrp)
 
         // Main loop
@@ -589,17 +591,17 @@ extension CaptureEngine {
         engine.micFile?.closeFile()
 
         // Re-open to patch headers
-        if let fh = FileHandle(forWritingAtPath: sysPath) {
+        if let fh = FileHandle(forWritingAtPath: sysWavPath) {
             Self.writeWavHeader(fh, dataSize: engine.sysDataSize, sampleRate: engine.sampleRate, channels: 2)
             fh.closeFile()
         }
-        if let fh = FileHandle(forWritingAtPath: micPath) {
+        if let fh = FileHandle(forWritingAtPath: micWavPath) {
             Self.writeWavHeader(fh, dataSize: engine.micDataSize, sampleRate: engine.micRate > 0 ? engine.micRate : engine.sampleRate, channels: 1)
             fh.closeFile()
         }
 
         print("\ndone — system: \(engine.sysDataSize) bytes, mic: \(engine.micDataSize) bytes", to: &stderr)
-        print("  system: \(sysPath)", to: &stderr)
-        print("  mic:    \(micPath)", to: &stderr)
+        print("  system: \(sysWavPath)", to: &stderr)
+        print("  mic:    \(micWavPath)", to: &stderr)
     }
 }

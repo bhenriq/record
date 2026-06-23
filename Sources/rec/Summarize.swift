@@ -7,12 +7,17 @@ import Foundation
 
 struct SummarizeConfig {
     var baseName = "output"
+    var outputDir = "."
+    var inputDir = "."
+    /// Explicit transcript path override (if set, used instead of computed path)
+    var transcriptOverride: String?
 
-    var transcriptPath: String { "\(baseName)_transcript.txt" }
+    var transcriptPath: String { transcriptOverride ?? "\(inputDir)/\(baseName)_transcript.txt" }
 }
 
 /// Run the summarization pipeline.
-func summarize(config: SummarizeConfig) throws {
+/// - Returns: The generated title string.
+func summarize(config: SummarizeConfig) throws -> String {
     let transcriptPath = config.transcriptPath
 
     guard FileManager.default.fileExists(atPath: transcriptPath) else {
@@ -81,9 +86,10 @@ func summarize(config: SummarizeConfig) throws {
     dateFormatterLong.dateFormat = "MMMM dd, yyyy"
 
     let mdFileName = "\(dateStr)_\(safeTitle).md"
+    let mdFilePath = "\(config.outputDir)/\(mdFileName)"
 
     print("Title: \(result.title)", to: &stderr)
-    print("Output: \(mdFileName)", to: &stderr)
+    print("Output: \(mdFilePath)", to: &stderr)
 
     // ---- Build markdown ----
     var md = "# \(result.title)\n\n"
@@ -109,8 +115,13 @@ func summarize(config: SummarizeConfig) throws {
 
     md += boldTranscript + "\n"
 
-    try md.write(toFile: mdFileName, atomically: true, encoding: .utf8)
-    print("Done: \(mdFileName)", to: &stderr)
+    // Ensure output directory exists
+    try FileManager.default.createDirectory(atPath: config.outputDir, withIntermediateDirectories: true)
+
+    try md.write(toFile: mdFilePath, atomically: true, encoding: .utf8)
+    print("Done: \(mdFilePath)", to: &stderr)
+
+    return result.title
 }
 
 // MARK: - pi subprocess

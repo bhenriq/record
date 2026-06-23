@@ -62,10 +62,16 @@ struct TranscribeConfig {
     var format: TranscriptFormat = .txt
     var censor = false
     var locale: String?
+    var outputDir = "."
 
-    var systemWav: String { "\(baseName)_system.wav" }
-    var micWav: String { "\(baseName)_mic.wav" }
-    var outputPath: String { "\(baseName)_transcript.\(format.rawValue)" }
+    /// Explicit path overrides (if non-nil, used instead of computed paths)
+    var systemWavOverride: String?
+    var micWavOverride: String?
+    var transcriptOverride: String?
+
+    var systemWav: String { systemWavOverride ?? "\(outputDir)/\(baseName)_system.wav" }
+    var micWav: String { micWavOverride ?? "\(outputDir)/\(baseName)_mic.wav" }
+    var outputPath: String { transcriptOverride ?? "\(outputDir)/\(baseName)_transcript.\(format.rawValue)" }
 }
 
 /// Run the full transcription pipeline.

@@ -1,11 +1,11 @@
 // main.swift — CLI entry point for rec
 //
 // Subcommands:
-//   rec [options]           — full pipeline (capture → mix → transcribe)
-//   rec capture [options]   — just capture
-//   rec mix <sys> <mic> <out> — just mix
-//   rec transcribe [options] — just transcribe
-//   rec summarize [options]  — just summarize
+//   rec [options]               — full pipeline (capture → mix → transcribe → summarize)
+//   rec capture [options]       — just capture
+//   rec mix <sys> <mic> <out>   — just mix
+//   rec transcribe [options]    — just transcribe
+//   rec summarize [options]     — just summarize
 //
 // Also supports:
 //   --generate-completion-script bash|zsh
@@ -22,24 +22,26 @@ enum Command {
 }
 
 struct GlobalOptions {
-    var baseName = "output"
+    var baseName = ""
     var duration = 0
     var interactiveMic = false
     var format: TranscriptFormat = .txt
     var censor = false
     var locale: String?
+    var outputDir: String?
+    var keepTemp = false
 }
 
 func printUsage() {
     print("""
-Usage: rec [options]                     Full pipeline: capture -> mix -> transcribe
+Usage: rec [options]                     Full pipeline: capture -> mix -> transcribe -> summarize
        rec capture [options]             Just capture
        rec mix <sys.wav> <mic.wav> <out> Just mix tracks to stereo
        rec transcribe [options]          Just transcribe existing WAVs
        rec summarize [options]           Create markdown summary from transcript
 
 Full-pipeline options:
-  -o <name>       Output base name (default: output)
+  -o <name>       Session name (used in auto-generated filenames; default: timestamp)
   -d <secs>       Recording duration (default: until Ctrl+C)
   -m              Interactively select microphone
   --txt           Plain text transcript (default)
@@ -48,14 +50,16 @@ Full-pipeline options:
   --json          JSON with word timestamps
   --censor        Redact sensitive words in transcript
   --locale <L>    Locale for speech recognition (e.g. fr-FR)
+  --output-dir <D> Output directory for finalized files (default: ~/Documents/Recordings/)
+  --keep-temp     Preserve scratch WAV files after successful run
   -h, --help      Show this help
 
 Examples:
-  rec -d 30 -o meeting
+  rec -d 30
   rec -d 10 -m --srt
   rec capture -d 5 -m
   rec mix sys.wav mic.wav out.wav
-  rec transcribe -o meeting --json
+  rec transcribe --json
   rec summarize
 """)
 }
@@ -73,7 +77,7 @@ _rec() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local subcmds="capture mix transcribe summarize"
-    local global_opts="-o -d -m --txt --srt --vtt --json --censor --locale -h --help"
+    local global_opts="-o -d -m --txt --srt --vtt --json --censor --locale --output-dir --keep-temp -h --help"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$subcmds $global_opts" -- "$cur") )
@@ -82,7 +86,7 @@ _rec() {
 
     case "${COMP_WORDS[1]}" in
         capture)
-            COMPREPLY=( $(compgen -W "-o -d -m" -- "$cur") )
+            COMPREPLY=( $(compgen -W "-o -d -m --output-dir --keep-temp" -- "$cur") )
             ;;
         mix)
             COMPREPLY=( $(compgen -f -- "$cur") )
@@ -120,7 +124,9 @@ _rec() {
             _arguments -s \\
                 {-o,-output}'[output base name]:filename:' \\
                 {-d,-duration}'[recording duration]:seconds:' \\
-                '-m[interactive mic selection]'
+                '-m[interactive mic selection]' \\
+                '--output-dir[output directory]:directory:_files -/' \\
+                '--keep-temp[preserve scratch WAVs]'
             ;;
         mix)
             _arguments -s \\
@@ -215,15 +221,17 @@ func runFullPipeline(_ args: [String]) {
     while i < args.count {
         let arg = args[i]
         switch arg {
-        case "-o":    opts.baseName = args[safe: i + 1] ?? "output"; i += 2
-        case "-d":    opts.duration = Int(args[safe: i + 1] ?? "0") ?? 0; i += 2
-        case "-m":    opts.interactiveMic = true; i += 1
-        case "--txt": opts.format = .txt; i += 1
-        case "--srt": opts.format = .srt; i += 1
-        case "--vtt": opts.format = .vtt; i += 1
-        case "--json": opts.format = .json; i += 1
-        case "--censor": opts.censor = true; i += 1
-        case "--locale": opts.locale = args[safe: i + 1]; i += 2
+        case "-o":           opts.baseName = args[safe: i + 1] ?? ""; i += 2
+        case "-d":           opts.duration = Int(args[safe: i + 1] ?? "0") ?? 0; i += 2
+        case "-m":           opts.interactiveMic = true; i += 1
+        case "--txt":        opts.format = .txt; i += 1
+        case "--srt":        opts.format = .srt; i += 1
+        case "--vtt":        opts.format = .vtt; i += 1
+        case "--json":       opts.format = .json; i += 1
+        case "--censor":     opts.censor = true; i += 1
+        case "--locale":     opts.locale = args[safe: i + 1]; i += 2
+        case "--output-dir": opts.outputDir = args[safe: i + 1]; i += 2
+        case "--keep-temp":  opts.keepTemp = true; i += 1
         case "-h", "--help": printUsage(); return
         default:
             print("rec: unknown option \(arg)", to: &stderr); printUsage()
@@ -231,23 +239,52 @@ func runFullPipeline(_ args: [String]) {
         }
     }
 
-    do {
-        // Step 1: Capture
-        print("=== Step 1: Capture ===", to: &stderr)
-        try CaptureEngine.capture(baseName: opts.baseName, duration: opts.duration, interactiveMic: opts.interactiveMic)
+    let finalDir = resolveOutputDir(flag: opts.outputDir)
+    let tempDir: String
 
-        // Step 2: Mix + encode
+    do {
+        tempDir = try createTempDir()
+    } catch {
+        print("Error: cannot create temp directory: \(error)", to: &stderr)
+        exit(1)
+    }
+
+    // Ensure final dir exists
+    try? FileManager.default.createDirectory(atPath: finalDir, withIntermediateDirectories: true)
+
+    var success = false
+    defer {
+        if !success && !opts.keepTemp {
+            print("  (scratch files left in \(tempDir))", to: &stderr)
+        }
+        if success && !opts.keepTemp {
+            cleanupTempDir(tempDir)
+        }
+    }
+
+    let sysWav  = "\(tempDir)/sys.wav"
+    let micWav  = "\(tempDir)/mic.wav"
+    let mixWav  = "\(tempDir)/mix.wav"
+    let mixMp3  = "\(tempDir)/mix.mp3"
+    let mixM4a  = "\(tempDir)/mix.m4a"
+    let transcriptTxt = "\(tempDir)/transcript.txt"
+
+    do {
+        // ======== Step 1: Capture ========
+        print("=== Step 1: Capture ===", to: &stderr)
+        try CaptureEngine.capture(sysWavPath: sysWav, micWavPath: micWav, duration: opts.duration, interactiveMic: opts.interactiveMic)
+
+        // ======== Step 2: Mix + encode ========
         print("\n=== Step 2: Mix ===", to: &stderr)
         do {
-            let sysWav = try WavFile.read(path: "\(opts.baseName)_system.wav")
-            let micWav = try WavFile.read(path: "\(opts.baseName)_mic.wav")
-            let result = try mix(system: sysWav, mic: micWav)
-            let wavPath = "\(opts.baseName).wav"
-            try result.writeWav(path: wavPath)
-            print("Done: \(wavPath)", to: &stderr)
+            let sysWavFile = try WavFile.read(path: sysWav)
+            let micWavFile = try WavFile.read(path: micWav)
+            let result = try mix(system: sysWavFile, mic: micWavFile)
+            try result.writeWav(path: mixWav)
+            print("Done: \(mixWav)", to: &stderr)
 
-            // Encode to compressed format (MP3 or M4A)
-            switch encodeAudio(wavPath: wavPath, outputBase: opts.baseName) {
+            // Encode to compressed format (temp, will be renamed after summarize)
+            switch encodeAudio(wavPath: mixWav, outputBase: "\(tempDir)/mix") {
             case .mp3(let path):
                 print("Encoded: \(path) (MP3)", to: &stderr)
             case .m4a(let path):
@@ -261,36 +298,106 @@ func runFullPipeline(_ args: [String]) {
             print("  (mix is optional — the WAV files are still available)", to: &stderr)
         }
 
-        // Step 3: Transcribe
+        // ======== Step 3: Transcribe ========
         print("\n=== Step 3: Transcribe ===", to: &stderr)
         var trConfig = TranscribeConfig()
-        trConfig.baseName = opts.baseName
         trConfig.format = opts.format
         trConfig.censor = opts.censor
         trConfig.locale = opts.locale
+        // Point to the short-named WAVs in the temp dir
+        trConfig.systemWavOverride = sysWav
+        trConfig.micWavOverride = micWav
+        trConfig.transcriptOverride = transcriptTxt
         do {
             try transcribe(config: trConfig)
         } catch {
             print("Transcription failed: \(error)", to: &stderr)
             print("  Install yap: brew install yap", to: &stderr)
-            print("  Then run:    rec transcribe -o \(opts.baseName)", to: &stderr)
+            print("  Then run:    rec transcribe", to: &stderr)
         }
 
-        // Step 4: Summarize (optional, requires pi)
+        // ======== Step 4: Summarize ========
         print("\n=== Step 4: Summarize ===", to: &stderr)
-        var summaryConfig = SummarizeConfig()
-        summaryConfig.baseName = opts.baseName
+        var generatedTitle = ""
         do {
-            try summarize(config: summaryConfig)
+            var summaryConfig = SummarizeConfig()
+            summaryConfig.outputDir = finalDir
+            summaryConfig.transcriptOverride = transcriptTxt
+            generatedTitle = try summarize(config: summaryConfig)
         } catch {
             print("Summarization skipped: \(error)", to: &stderr)
             print("  Install pi: npm install -g @earendil-works/pi-coding-agent", to: &stderr)
-            print("  Then run:   rec summarize -o \(opts.baseName)", to: &stderr)
+            print("  Then run:   rec summarize", to: &stderr)
         }
 
+        // ======== Finalize: move audio to final dir with proper name ========
+        let dateStr: String = {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd"
+            return fmt.string(from: Date())
+        }()
+
+        let finalStem: String
+        if !generatedTitle.isEmpty {
+            let safeTitle = generatedTitle
+                .lowercased()
+                .replacingOccurrences(of: "[^a-z0-9]+", with: "_", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+            finalStem = safeTitle.isEmpty ? dateStr : "\(dateStr)_\(safeTitle)"
+        } else if !opts.baseName.isEmpty {
+            finalStem = "\(dateStr)_\(opts.baseName)"
+        } else {
+            // Fallback: timestamp
+            let fmt = DateFormatter()
+            fmt.dateFormat = "HHmmss"
+            let timeStr = fmt.string(from: Date())
+            finalStem = "\(dateStr)_\(timeStr)"
+        }
+
+        // Move MP3 or M4A to final dir
+        let compressedSrc: String
+        let compressedExt: String
+        if FileManager.default.fileExists(atPath: mixMp3) {
+            compressedSrc = mixMp3
+            compressedExt = "mp3"
+        } else if FileManager.default.fileExists(atPath: mixM4a) {
+            compressedSrc = mixM4a
+            compressedExt = "m4a"
+        } else {
+            compressedSrc = ""
+            compressedExt = ""
+        }
+
+        var finalAudioPath = ""
+        if !compressedSrc.isEmpty {
+            finalAudioPath = "\(finalDir)/\(finalStem).\(compressedExt)"
+            try? FileManager.default.moveItem(atPath: compressedSrc, toPath: finalAudioPath)
+        }
+
+        // Also move the mix WAV if compressed failed
+        if finalAudioPath.isEmpty && FileManager.default.fileExists(atPath: mixWav) {
+            finalAudioPath = "\(finalDir)/\(finalStem).wav"
+            try? FileManager.default.copyItem(atPath: mixWav, toPath: finalAudioPath)
+        }
+
+        success = true
+
         print("\nAll done.", to: &stderr)
-        print("  Audio:      \(opts.baseName).wav", to: &stderr)
-        print("  Transcript: \(opts.baseName)_transcript.\(opts.format.rawValue)", to: &stderr)
+        if !finalAudioPath.isEmpty {
+            print("  Audio:      \(finalAudioPath)", to: &stderr)
+        }
+        if !generatedTitle.isEmpty {
+            let safeTitle = generatedTitle
+                .lowercased()
+                .replacingOccurrences(of: "[^a-z0-9]+", with: "_", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+            print("  Summary:    \(finalDir)/\(dateStr)_\(safeTitle).md", to: &stderr)
+        } else {
+            print("  Summary:    (skipped — install pi for AI summaries)", to: &stderr)
+        }
+        if opts.keepTemp {
+            print("  Scratch:    \(tempDir)", to: &stderr)
+        }
     } catch {
         print("Error: \(error)", to: &stderr)
         exit(1)
@@ -304,22 +411,46 @@ func runCapture(_ args: [String]) {
     var baseName = "output"
     var duration = 0
     var interactiveMic = false
+    var outputDir: String?
+    var keepTemp = false
     var i = 0
     while i < args.count {
         switch args[i] {
         case "-o": baseName = args[safe: i + 1] ?? "output"; i += 2
         case "-d": duration = Int(args[safe: i + 1] ?? "0") ?? 0; i += 2
         case "-m": interactiveMic = true; i += 1
+        case "--output-dir": outputDir = args[safe: i + 1]; i += 2
+        case "--keep-temp": keepTemp = true; i += 1
         case "-h", "--help":
-            print("Usage: rec capture [-o base] [-d secs] [-m]")
+            print("Usage: rec capture [-o base] [-d secs] [-m] [--output-dir D] [--keep-temp]")
             print("  Record system audio + microphone to separate WAV files")
             return
         default:
             print("rec capture: unknown option \(args[i])", to: &stderr); exit(1)
         }
     }
+
+    // Write to temp dir by default, or to specified dir
+    let outDir: String
+    if let dir = outputDir {
+        outDir = (dir as NSString).expandingTildeInPath
+    } else {
+        guard let tmp = try? createTempDir() else {
+            print("Error: cannot create temp directory", to: &stderr)
+            exit(1)
+        }
+        outDir = tmp
+    }
+    try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+
+    let sysPath = "\(outDir)/\(baseName)_system.wav"
+    let micPath = "\(outDir)/\(baseName)_mic.wav"
+
     do {
-        try CaptureEngine.capture(baseName: baseName, duration: duration, interactiveMic: interactiveMic)
+        try CaptureEngine.capture(sysWavPath: sysPath, micWavPath: micPath, duration: duration, interactiveMic: interactiveMic)
+        if !keepTemp && outputDir == nil {
+            print("  (scratch WAVs in \(outDir); use --keep-temp to preserve)", to: &stderr)
+        }
     } catch {
         print("Error: \(error)", to: &stderr)
         exit(1)
@@ -390,7 +521,7 @@ func runSummarize(_ args: [String]) {
         }
     }
     do {
-        try summarize(config: config)
+        _ = try summarize(config: config)
     } catch {
         print("Error: \(error)", to: &stderr)
         exit(1)

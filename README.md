@@ -33,11 +33,37 @@ cc -o capture capture.m -framework CoreAudio -framework Foundation
 ## Usage
 
 ```sh
-./capture                   # record to output.wav, stop with Ctrl+C
-./capture -o test.wav       # custom output file
-./capture -d 10             # record for 10 seconds
-./capture -o test.wav -d 5  # both
+./capture                               # record to output.wav, stop with Ctrl+C
+./capture -o test.wav                   # custom output file
+./capture -d 10                         # record for 10 seconds
+./capture -o test.wav -d 5              # both
+./capture -m                            # interactively select microphone
+./capture -m -o test.wav -d 10          # interactive mic + custom options
 ```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `-o file` | Output WAV file (default: `output.wav`) |
+| `-d secs` | Recording duration in seconds (default: until Ctrl+C) |
+| `-m`      | Interactively select the microphone input device |
+
+When `-m` is used, the tool lists all available audio input devices in
+alphabetical order and prompts you to pick one by number:
+
+```
+Available input devices:
+  1. BlackHole 2ch (2 ch, 48000 Hz)
+  2. iPhone B Microphone (1 ch, 48000 Hz)
+  3. MacBook Air Microphone (1 ch, 48000 Hz)
+  4. OpenSwim Pro by Shokz (1 ch, 16000 Hz)
+  5. System Audio Recorder (2 ch, 48000 Hz)
+
+Select microphone [1-5]:
+```
+
+Without `-m`, the default system input device is used automatically.
 
 If no microphone is available (e.g. Mac Mini with no input device), the R
 channel will be silence and a warning is printed.
@@ -47,9 +73,10 @@ channel will be silence and a warning is printed.
 1. **System audio**: Creates a **process tap** (`AudioHardwareCreateProcessTap`)
    that captures every application's audio output, wrapped in a private
    **aggregate device** so CoreAudio presents it as a regular input device.
-2. **Microphone**: Opens the default input device
-   (`kAudioHardwarePropertyDefaultInputDevice`) and registers a second
-   **I/O procedure**.
+2. **Microphone**: By default, opens the system's default input device
+   (`kAudioHardwarePropertyDefaultInputDevice`). When `-m` is given, all
+   input devices are enumerated and the user selects one interactively.
+   A second **I/O procedure** is registered on the chosen device.
 3. **Ring buffers**: Both IOProcs write Float32 samples into separate
    lock‑free SPSC ring buffers — no file I/O on the real‑time threads.
 4. **Write loop**: A polling loop drains both ring buffers, mixes system

@@ -1,3 +1,6 @@
 capture
 capture.dSYM/
 *.wav
+*.mp3
+*.flac
+*.aac

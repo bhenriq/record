@@ -362,20 +362,155 @@ static void writeLoop(int duration) {
 }
 
 // ---------------------------------------------------------------------------
+// Interactive microphone selector
+// ---------------------------------------------------------------------------
+// Struct for input device info used by interactiveSelectMic
+typedef struct {
+    AudioObjectID id;
+    char          name[256];
+    uint32_t      channels;
+    Float64       rate;
+} DevInfo;
+
+static int devInfoCompare(const void *a, const void *b) {
+    return strcasecmp(((const DevInfo *)a)->name,
+                      ((const DevInfo *)b)->name);
+}
+
+// Enumerates all audio input devices, lists them with numbers, and prompts
+// the user to select one.  Returns 0 on success, -1 on failure.
+static int interactiveSelectMic(AudioObjectID *outID, uint32_t *outChannels,
+                                 Float64 *outRate, char *outName, size_t nameSize) {
+    AudioObjectPropertyAddress addr = {
+        kAudioHardwarePropertyDevices,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 dataSize = 0;
+    OSStatus err = AudioObjectGetPropertyDataSize(kAudioObjectSystemObject,
+                                                   &addr, 0, NULL, &dataSize);
+    if (err != noErr || dataSize == 0) return -1;
+
+    AudioObjectID *devices = malloc(dataSize);
+    err = AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL,
+                                      &dataSize, devices);
+    if (err != noErr) { free(devices); return -1; }
+    UInt32 devCount = dataSize / sizeof(AudioObjectID);
+
+    // One pass: collect all devices with input channels
+    DevInfo *inputs = calloc(devCount, sizeof(DevInfo));
+    uint32_t inputCount = 0;
+
+    for (UInt32 i = 0; i < devCount; i++) {
+        AudioObjectID dev = devices[i];
+
+        AudioObjectPropertyAddress inAddr = {
+            kAudioDevicePropertyStreamConfiguration,
+            kAudioObjectPropertyScopeInput,
+            kAudioObjectPropertyElementMain
+        };
+        UInt32 bufSize = 0;
+        AudioObjectGetPropertyDataSize(dev, &inAddr, 0, NULL, &bufSize);
+        if (bufSize == 0) continue;
+        AudioBufferList *buflist = malloc(bufSize);
+        AudioObjectGetPropertyData(dev, &inAddr, 0, NULL, &bufSize, buflist);
+        UInt32 inCh = 0;
+        for (UInt32 j = 0; j < buflist->mNumberBuffers; j++)
+            inCh += buflist->mBuffers[j].mNumberChannels;
+        free(buflist);
+        if (inCh == 0) continue;
+
+        char devName[256] = "";
+        AudioObjectPropertyAddress nAddr = {
+            kAudioDevicePropertyDeviceName,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        UInt32 ns = sizeof(devName) - 1;
+        AudioObjectGetPropertyData(dev, &nAddr, 0, NULL, &ns, &devName);
+
+        AudioObjectPropertyAddress fmtAddr = {
+            kAudioDevicePropertyStreamFormat,
+            kAudioObjectPropertyScopeInput,
+            kAudioObjectPropertyElementMain
+        };
+        AudioStreamBasicDescription asbd = {};
+        UInt32 fs = sizeof(asbd);
+        AudioObjectGetPropertyData(dev, &fmtAddr, 0, NULL, &fs, &asbd);
+
+        inputs[inputCount].id = dev;
+        inputs[inputCount].channels = inCh;
+        inputs[inputCount].rate = asbd.mSampleRate;
+        strncpy(inputs[inputCount].name, devName, 255);
+        inputs[inputCount].name[255] = '\0';
+        inputCount++;
+    }
+    free(devices);
+
+    if (inputCount == 0) {
+        fprintf(stderr, "error: no audio input devices found\n");
+        free(inputs);
+        return -1;
+    }
+
+    // Sort alphabetically by device name for consistent ordering
+    qsort(inputs, inputCount, sizeof(DevInfo), devInfoCompare);
+
+    printf("\nAvailable input devices:\n");
+    for (uint32_t i = 0; i < inputCount; i++) {
+        printf("  %2u. %s (%u ch, %.0f Hz)\n",
+               i + 1, inputs[i].name,
+               (unsigned)inputs[i].channels, inputs[i].rate);
+    }
+
+    printf("\nSelect microphone [1-%u]: ", inputCount);
+    fflush(stdout);
+
+    char line[64];
+    uint32_t choice = 0;
+    if (fgets(line, sizeof(line), stdin)) {
+        choice = (uint32_t)atoi(line);
+    }
+
+    if (choice < 1 || choice > inputCount) {
+        fprintf(stderr, "error: invalid selection (must be 1-%u)\n", inputCount);
+        free(inputs);
+        return -1;
+    }
+
+    uint32_t idx = choice - 1;
+    *outID       = inputs[idx].id;
+    *outChannels = inputs[idx].channels;
+    *outRate     = inputs[idx].rate;
+    strncpy(outName, inputs[idx].name, nameSize - 1);
+    outName[nameSize - 1] = '\0';
+
+    free(inputs);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char **argv) {
     const char *outputPath = "output.wav";
     int         duration   = 0;
+    int         interactiveMic = 0;
 
     for (int i = 1; i < argc; i++) {
         if      (!strcmp(argv[i], "-o") && i + 1 < argc) outputPath = argv[++i];
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) duration = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-m"))                 interactiveMic = 1;
         else if (!strcmp(argv[i], "-h")) {
-            printf("usage: %s [-o out.wav] [-d seconds]\n", argv[0]);
+            printf("usage: %s [-o out.wav] [-d seconds] [-m]\n", argv[0]);
             printf("  Record system audio + microphone to WAV\n");
             printf("    L = system audio (stereo → mono)\n");
             printf("    R = microphone  (mono)\n");
+            printf("\n");
+            printf("  Options:\n");
+            printf("    -o file   output WAV file (default: output.wav)\n");
+            printf("    -d secs   recording duration in seconds (default: until Ctrl+C)\n");
+            printf("    -m        interactively select microphone input device\n");
             return 0;
         }
     }
@@ -446,12 +581,46 @@ int main(int argc, char **argv) {
         }
     }
 
-    // ---- Find microphone device: use the system's default input device ----
+    // ---- Find microphone device ----
     {
-        AudioObjectPropertyAddress defaultAddr = {
-            kAudioHardwarePropertyDefaultInputDevice,
-            kAudioObjectPropertyScopeGlobal,
-            kAudioObjectPropertyElementMain
+        if (interactiveMic) {
+            char selName[256] = "";
+            AudioObjectID selID = 0;
+            uint32_t selChan = 0;
+            Float64 selRate = 0;
+
+            if (interactiveSelectMic(&selID, &selChan, &selRate,
+                                     selName, sizeof(selName)) != 0) {
+                fprintf(stderr, "warning: no microphone selected — mic will be silent\n");
+            } else {
+                gMicID = selID;
+                gMicChannels = selChan;
+                gMicRate = selRate;
+
+                printf("mic: %s (%u ch, %.0f Hz)\n",
+                       selName, (unsigned)selChan, selRate);
+
+                if (selRate != gSampleRate) {
+                    fprintf(stderr,
+                        "warning: mic rate (%.0f Hz) ≠ sys rate (%.0f Hz)\n"
+                        "         — using AudioConverter SRC\n",
+                        selRate, gSampleRate);
+                }
+
+                OSStatus err = AudioDeviceCreateIOProcID(gMicID, micIOProc,
+                                                         NULL, &gMicIOProcID);
+                if (err != noErr) {
+                    fprintf(stderr, "warning: could not open mic device — mic will be silent\n");
+                    gMicID = 0;
+                    gMicChannels = 0;
+                    gMicRate = 0;
+                }
+            }
+        } else {
+            AudioObjectPropertyAddress defaultAddr = {
+                kAudioHardwarePropertyDefaultInputDevice,
+                kAudioObjectPropertyScopeGlobal,
+                kAudioObjectPropertyElementMain
         };
         AudioObjectID defaultDev = 0;
         UInt32 dsize = sizeof(defaultDev);
@@ -625,6 +794,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "warning: no input device found — mic will be silent\n");
             }
         }
+    }
     }
 
     // ---- Create AudioConverter SRC if mic rate ≠ sys rate ----

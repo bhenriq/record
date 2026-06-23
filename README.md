@@ -118,8 +118,9 @@ rec mix output_system.wav output_mic.wav output.mp3
 
 1. **Detects clock drift** by comparing the sample counts of both tracks
 2. **Corrects drift** using SoX's `tempo -s` (pitch-preserving, optimised for speech)
-3. **Assigns channels** — mic → left, system → right
-4. **Encodes to MP3** at 128 kbps, 48 kHz, stereo
+3. **Resamples mic** to match the system sample rate if they differ (e.g. 16 kHz mic → 48 kHz)
+4. **Assigns channels** — mic → left, system → right
+5. **Encodes to MP3** at 128 kbps, 48 kHz, stereo
 
 ## Transcription — `rec transcribe` / `transcribe.sh`
 
@@ -135,18 +136,22 @@ rec transcribe --censor                          # redact sensitive words
 rec transcribe --locale fr-FR                    # specify locale
 ```
 
+> **txt format:** Microphone is labeled **`Me`**, system audio is **`Them`**.
+> Timestamps are omitted and consecutive same-speaker blocks are merged into one line.
+> For timestamped output use `--srt`, `--vtt`, or `--json`.
+
 How it works:
 
 1. **Transcribes each source independently** with `yap transcribe --json --word-timestamps`
 2. **Corrects clock drift** using the same sample‑count ratio as the mixer
 3. **Merges chronologically** — all segments from both speakers are
-   interleaved by timestamp and labeled `[System]` or `[Mic]`
+   interleaved by timestamp and labeled `System` or `Mic`
 
 ### Output formats
 
 | Format | Description | Example |
 |--------|-------------|---------|
-| `txt` (default) | Plain text with `[Speaker MM:SS.X]` prefix | `[Mic 00:01.2] Hi there` |
+| `txt` (default) | Plain text — `Me`/`Them` labels, no timestamps, consecutive same-speaker blocks merged | `Me: Hi there` |
 | `srt` | SubRip subtitles with speaker prefix | `[System] Welcome everyone` |
 | `vtt` | WebVTT format, suitable for browsers | `[Mic] Thanks for having me` |
 | `json` | Full merged data structure with speaker on every segment/word | Machine-readable |

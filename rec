@@ -139,6 +139,15 @@ rec_mix() {
     fi
     echo >&2
 
+    # -- sample rate conversion (SoX -M requires matching rates) --
+    local mic_resampled=""
+    if has_sox && [[ "$sys_rate" -ne "$mic_rate" ]]; then
+        echo "  Resampling mic from ${mic_rate} Hz to ${sys_rate} Hz..." >&2
+        mic_resampled="$(mktemp /tmp/rec_mic_resample_$$.XXXXXXXXXX.wav)" || die "temp file creation failed"
+        sox "$mic_final" -r "$sys_rate" "$mic_resampled"
+        mic_final="$mic_resampled"
+    fi
+
     # -- mix --
     if has_sox; then
         echo "Mixing to stereo MP3 with SoX (128k, mic left, system right)..." >&2
@@ -153,6 +162,7 @@ rec_mix() {
     fi
 
     [[ -n "$mic_aligned" ]] && rm -f "$mic_aligned"
+    [[ -n "$mic_resampled" ]] && rm -f "$mic_resampled"
     echo "Done: $out" >&2
 }
 
@@ -280,15 +290,21 @@ rec_transcribe() {
             cat "$merged_json" > "$out"
             ;;
         txt)
-            jq -r '.segments[] | [.speaker, (.start | tostring), .text] | @tsv' "$merged_json" |
-            awk -F'\t' '
-            function fmt_time(s) {
-                m = int((s % 3600) / 60)
-                sec = int(s % 60)
-                dec = int((s - int(s)) * 10)
-                return sprintf("%02d:%02d.%d", m, sec, dec)
-            }
-            { printf("[%s %s] %s\n", $1, fmt_time($2 + 0), $3) }' > "$out"
+            jq -r '
+              .segments | reduce .[] as $s (
+                {prev: null, items: []};
+                if $s.speaker == .prev then
+                  .items[-1].text += " " + $s.text
+                else
+                  .items += [{speaker: $s.speaker, text: $s.text}]
+                  | .prev = $s.speaker
+                end
+              ) | .items[] |
+              (if .speaker == "System" then "Them"
+               elif .speaker == "Mic" then "Me"
+               else .speaker end) as $label |
+              "\($label): \(.text)"
+            ' "$merged_json" > "$out"
             ;;
         srt)
             jq -r '.segments[] | [.id, (.start | tostring), (.end | tostring), .speaker, .text] | @tsv' "$merged_json" |

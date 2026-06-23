@@ -1,14 +1,19 @@
-// capture.m — capture system audio + microphone to 2‑channel WAV
+// capture.m — capture system audio + microphone to separate WAV files
 //
 // Uses CoreAudio's Process Tap API (macOS 14.2+) to capture system audio,
-// and the default input device for microphone capture.  Output is a 48 kHz
-// 16‑bit WAV file with:
-//   L = system audio (stereo mixed to mono)
-//   R = microphone (mono)
+// and the selected microphone device.  Outputs two separate 16-bit WAV files:
+//   system file — stereo system audio at the aggregate device's sample rate
+//   mic file    — mono microphone at the mic's native sample rate
+//
+// No mixing, no sample-rate conversion, no real-time drift compensation.
+// Align and mix the two files in post-processing (see mix.sh).
 //
 // Build:   cc -o capture capture.m -framework CoreAudio -framework Foundation
-// Run:     ./capture -o recording.wav           (until Ctrl+C)
-//          ./capture -o recording.wav -d 10     (10 seconds)
+// Run:     ./capture                              -> output_system.wav + output_mic.wav
+//          ./capture -o recording                 -> recording_system.wav + recording_mic.wav
+//          ./capture -d 10                        -> 10 seconds
+//          ./capture -m                           -> interactively select mic
+//          ./capture -m -o test -d 5              -> all options
 
 #import <CoreAudio/CoreAudio.h>
 #import <CoreAudio/CATapDescription.h>
@@ -26,7 +31,7 @@
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-#define RING_BUF_SAMPLES    (256 * 1024)   // 256k floats ≈ 1.3 s at 48 kHz
+#define RING_BUF_SAMPLES    (512 * 1024)   // 512k floats ≈ 2.7 s at 48 kHz stereo
 #define MAX_TICK_FRAMES     16384          // max frames per write tick
 #define TICK_INTERVAL_US    10000          // 10 ms polling interval
 
@@ -93,11 +98,11 @@ static uint32_t ringRead(RingBuffer *r, float *samples, uint32_t maxCount) {
 // ---------------------------------------------------------------------------
 static Float64 gSampleRate = 48000.0;
 
-static void writeWavHeader(FILE *fp, size_t dataSize) {
-    uint16_t channels    = 2;
+static void writeWavHeader(FILE *fp, size_t dataSize, Float64 sampleRate,
+                           uint16_t channels) {
     uint16_t bitsPerSamp = 16;
     uint16_t blockAlign  = channels * (bitsPerSamp / 8);
-    uint32_t byteRate    = (uint32_t)(gSampleRate * blockAlign);
+    uint32_t byteRate    = (uint32_t)(sampleRate * blockAlign);
     uint32_t chunkSize   = (uint32_t)dataSize + 36;
 
     rewind(fp);
@@ -111,7 +116,7 @@ static void writeWavHeader(FILE *fp, size_t dataSize) {
     fwrite(&fmtLen, 4, 1, fp);
     fwrite(&fmtTag, 2, 1, fp);
     fwrite(&channels, 2, 1, fp);
-    uint32_t sr = (uint32_t)gSampleRate;
+    uint32_t sr = (uint32_t)sampleRate;
     fwrite(&sr, 4, 1, fp);
     fwrite(&byteRate, 4, 1, fp);
     fwrite(&blockAlign, 2, 1, fp);
@@ -130,12 +135,14 @@ static AudioObjectID         gAggID       = 0;
 static AudioObjectID         gMicID       = 0;
 static AudioDeviceIOProcID   gSysIOProcID = NULL;
 static AudioDeviceIOProcID   gMicIOProcID = NULL;
-static FILE                 *gFile        = NULL;
-static size_t                gDataSize    = 0;
+static FILE                 *gSysFile     = NULL;
+static FILE                 *gMicFile     = NULL;
+static size_t                gSysDataSize = 0;
+static size_t                gMicDataSize = 0;
 static uint32_t              gMicChannels = 0;     // 0 = mic not available
 static Float64               gMicRate     = 0;     // mic device sample rate
-static AudioConverterRef     gMicConverter = NULL; // SRC: mic rate → sys rate
 static volatile sig_atomic_t gRunning     = 1;
+
 static RingBuffer            gSysRing;              // stereo interleaved floats
 static RingBuffer            gMicRing;              // mono floats
 
@@ -206,137 +213,55 @@ static OSStatus micIOProc(AudioObjectID         inDevice,
 }
 
 // ---------------------------------------------------------------------------
-// AudioConverter input tracker & callback  (for sample‑rate conversion)
-// ---------------------------------------------------------------------------
-typedef struct {
-    const float *data;
-    uint32_t     totalFrames;
-    uint32_t     consumed;
-} InputTracker;
-
-static OSStatus micInputCallback(AudioConverterRef       inConverter,
-                                  UInt32                 *ioNumberDataPackets,
-                                  AudioBufferList        *ioData,
-                                  AudioStreamPacketDescription **outPacketDesc,
-                                  void                   *inUserData) {
-    InputTracker *tracker = (InputTracker *)inUserData;
-    UInt32 avail = tracker->totalFrames - tracker->consumed;
-    UInt32 n = (*ioNumberDataPackets < avail) ? *ioNumberDataPackets : avail;
-
-    ioData->mNumberBuffers = 1;
-    ioData->mBuffers[0].mData          = (void *)(tracker->data + tracker->consumed);
-    ioData->mBuffers[0].mDataByteSize  = n * sizeof(float);
-    ioData->mBuffers[0].mNumberChannels = 1;
-
-    *ioNumberDataPackets = n;
-    tracker->consumed += n;
-    (void)outPacketDesc;
-    (void)inConverter;
-    return noErr;
-}
-
-// ---------------------------------------------------------------------------
-// Write loop  —  drains rings, mixes L=sys‑mono R=mic, writes WAV
+// Write loop  —  writes each ring buffer to its own file independently.
+// No mixing, no SRC, no inter-channel synchronization.
 // ---------------------------------------------------------------------------
 static void writeLoop(int duration) {
     float   sysBuf[MAX_TICK_FRAMES * 2];
-    float   rawMicBuf[MAX_TICK_FRAMES];
-    float   convertedBuf[MAX_TICK_FRAMES];
-    int16_t conv[MAX_TICK_FRAMES * 2];
+    float   micBuf[MAX_TICK_FRAMES];
+    int16_t convSys[MAX_TICK_FRAMES * 2];
+    int16_t convMic[MAX_TICK_FRAMES];
     time_t  start = time(NULL);
 
-    // Persistent residue buffer for partial SRC frames
-    static float  micResidue[MAX_TICK_FRAMES * 4];
-    static uint32_t micResidueFrames = 0;
-
     while (gRunning) {
-        // ---- Read system audio (stereo frames) ----
+        // ---- Write system audio (stereo interleaved) ----
         uint32_t sysFrames = ringAvailable(&gSysRing) / 2;
         if (sysFrames > MAX_TICK_FRAMES) sysFrames = MAX_TICK_FRAMES;
 
         if (sysFrames > 0) {
             ringRead(&gSysRing, sysBuf, sysFrames * 2);
 
-            // ---- Read mic samples from ring ----
-            uint32_t micAvail = ringAvailable(&gMicRing);
-            if (micAvail > MAX_TICK_FRAMES) micAvail = MAX_TICK_FRAMES;
-            uint32_t micRead = ringRead(&gMicRing, rawMicBuf, micAvail);
-
-            // ---- Produce mic output (converted to sys rate) ----
-            float   *micOut = NULL;
-            uint32_t micOutFrames = 0;
-
-            if (gMicConverter) {
-                // SRC path: use AudioConverter to upsample/downsample
-                if (micRead > 0) {
-                    uint32_t cap = sizeof(micResidue) / sizeof(float);
-                    if (micResidueFrames + micRead <= cap) {
-                        memcpy(&micResidue[micResidueFrames], rawMicBuf,
-                               micRead * sizeof(float));
-                        micResidueFrames += micRead;
-                    } else {
-                        // Residue full — flush and start fresh
-                        micResidueFrames = micRead > cap ? cap : micRead;
-                        memcpy(micResidue, rawMicBuf,
-                               micResidueFrames * sizeof(float));
-                    }
-                }
-
-                if (micResidueFrames > 0) {
-                    InputTracker tracker = {
-                        .data = micResidue,
-                        .totalFrames = micResidueFrames,
-                        .consumed = 0
-                    };
-                    uint32_t outFrames = sysFrames;
-                    AudioBufferList outBuf = {
-                        .mNumberBuffers = 1,
-                        .mBuffers[0] = {
-                            .mData         = convertedBuf,
-                            .mDataByteSize = outFrames * sizeof(float),
-                            .mNumberChannels = 1
-                        }
-                    };
-
-                    OSStatus err = AudioConverterFillComplexBuffer(
-                        gMicConverter, micInputCallback, &tracker,
-                        &outFrames, &outBuf, NULL);
-
-                    if (err == noErr && outFrames > 0) {
-                        uint32_t consumed = tracker.consumed;
-                        if (consumed > micResidueFrames)
-                            consumed = micResidueFrames;
-                        micResidueFrames -= consumed;
-                        if (micResidueFrames > 0)
-                            memmove(micResidue, micResidue + consumed,
-                                    micResidueFrames * sizeof(float));
-
-                        micOut = convertedBuf;
-                        micOutFrames = outFrames;
-                    }
-                }
-            } else {
-                // Direct path (rates match, no converter needed)
-                if (micRead > 0) {
-                    micOut = rawMicBuf;
-                    micOutFrames = (micRead < sysFrames) ? micRead : sysFrames;
-                }
+            // Stereo Float32 → SInt16
+            for (uint32_t i = 0; i < sysFrames * 2; i++) {
+                float s = sysBuf[i];
+                if      (s >  1.0f) s =  1.0f;
+                else if (s < -1.0f) s = -1.0f;
+                convSys[i] = (int16_t)(s * 32767.0f);
             }
 
-            // ---- Mix: L = system (stereo → mono), R = mic (converted) ----
-            for (uint32_t i = 0; i < sysFrames; i++) {
-                float L = (sysBuf[i * 2] + sysBuf[i * 2 + 1]) * 0.5f;
-                float R = (micOut && i < micOutFrames) ? micOut[i] : 0.0f;
-                if      (L >  1.0f) L =  1.0f;
-                else if (L < -1.0f) L = -1.0f;
-                if      (R >  1.0f) R =  1.0f;
-                else if (R < -1.0f) R = -1.0f;
-                conv[i * 2]     = (int16_t)(L * 32767.0f);
-                conv[i * 2 + 1] = (int16_t)(R * 32767.0f);
+            size_t written = fwrite(convSys, sizeof(int16_t),
+                                    sysFrames * 2, gSysFile);
+            gSysDataSize += written * sizeof(int16_t);
+        }
+
+        // ---- Write microphone audio (mono) ----
+        uint32_t micFrames = ringAvailable(&gMicRing);
+        if (micFrames > MAX_TICK_FRAMES) micFrames = MAX_TICK_FRAMES;
+
+        if (micFrames > 0 && gMicFile) {
+            ringRead(&gMicRing, micBuf, micFrames);
+
+            // Mono Float32 → SInt16
+            for (uint32_t i = 0; i < micFrames; i++) {
+                float s = micBuf[i];
+                if      (s >  1.0f) s =  1.0f;
+                else if (s < -1.0f) s = -1.0f;
+                convMic[i] = (int16_t)(s * 32767.0f);
             }
 
-            size_t n = fwrite(conv, sizeof(int16_t), sysFrames * 2, gFile);
-            gDataSize += n * sizeof(int16_t);
+            size_t written = fwrite(convMic, sizeof(int16_t),
+                                    micFrames, gMicFile);
+            gMicDataSize += written * sizeof(int16_t);
         }
 
         // ---- Overflow protection ----
@@ -348,11 +273,8 @@ static void writeLoop(int duration) {
         if (ringAvailable(&gMicRing) > RING_BUF_SAMPLES * 9 / 10) {
             uint32_t drop = ringAvailable(&gMicRing) - RING_BUF_SAMPLES / 2;
             if (drop > MAX_TICK_FRAMES) drop = MAX_TICK_FRAMES;
-            ringRead(&gMicRing, rawMicBuf, drop);
+            ringRead(&gMicRing, micBuf, drop);
         }
-        // Flush SRC residue if it accumulates beyond 3 ticks
-        if (micResidueFrames > MAX_TICK_FRAMES * 3)
-            micResidueFrames = 0;
 
         // ---- Duration check ----
         if (duration > 0 && (time(NULL) - start) >= duration) gRunning = 0;
@@ -364,7 +286,6 @@ static void writeLoop(int duration) {
 // ---------------------------------------------------------------------------
 // Interactive microphone selector
 // ---------------------------------------------------------------------------
-// Struct for input device info used by interactiveSelectMic
 typedef struct {
     AudioObjectID id;
     char          name[256];
@@ -377,8 +298,6 @@ static int devInfoCompare(const void *a, const void *b) {
                       ((const DevInfo *)b)->name);
 }
 
-// Enumerates all audio input devices, lists them with numbers, and prompts
-// the user to select one.  Returns 0 on success, -1 on failure.
 static int interactiveSelectMic(AudioObjectID *outID, uint32_t *outChannels,
                                  Float64 *outRate, char *outName, size_t nameSize) {
     AudioObjectPropertyAddress addr = {
@@ -397,7 +316,6 @@ static int interactiveSelectMic(AudioObjectID *outID, uint32_t *outChannels,
     if (err != noErr) { free(devices); return -1; }
     UInt32 devCount = dataSize / sizeof(AudioObjectID);
 
-    // One pass: collect all devices with input channels
     DevInfo *inputs = calloc(devCount, sizeof(DevInfo));
     uint32_t inputCount = 0;
 
@@ -453,7 +371,6 @@ static int interactiveSelectMic(AudioObjectID *outID, uint32_t *outChannels,
         return -1;
     }
 
-    // Sort alphabetically by device name for consistent ordering
     qsort(inputs, inputCount, sizeof(DevInfo), devInfoCompare);
 
     printf("\nAvailable input devices:\n");
@@ -490,44 +407,98 @@ static int interactiveSelectMic(AudioObjectID *outID, uint32_t *outChannels,
 }
 
 // ---------------------------------------------------------------------------
+// Derive base name from argv[0] (strip directory and extension)
+// ---------------------------------------------------------------------------
+static void defaultBaseName(const char *argv0, char *out, size_t outSize) {
+    // Find last path component
+    const char *base = strrchr(argv0, '/');
+    base = base ? base + 1 : argv0;
+
+    // Copy and strip .m or .c extension if present
+    strncpy(out, base, outSize - 1);
+    out[outSize - 1] = '\0';
+
+    char *dot = strrchr(out, '.');
+    if (dot && (strcmp(dot, ".m") == 0 || strcmp(dot, ".c") == 0))
+        *dot = '\0';
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char **argv) {
-    const char *outputPath = "output.wav";
+    const char *outputBase = NULL;   // set below
     int         duration   = 0;
     int         interactiveMic = 0;
 
     for (int i = 1; i < argc; i++) {
-        if      (!strcmp(argv[i], "-o") && i + 1 < argc) outputPath = argv[++i];
+        if      (!strcmp(argv[i], "-o") && i + 1 < argc) outputBase = argv[++i];
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) duration = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-m"))                 interactiveMic = 1;
         else if (!strcmp(argv[i], "-h")) {
-            printf("usage: %s [-o out.wav] [-d seconds] [-m]\n", argv[0]);
-            printf("  Record system audio + microphone to WAV\n");
-            printf("    L = system audio (stereo → mono)\n");
-            printf("    R = microphone  (mono)\n");
+            printf("usage: %s [-o base] [-d seconds] [-m]\n", argv[0]);
+            printf("  Record system audio + microphone to separate WAV files\n");
+            printf("    {base}_system.wav  — system audio (stereo)\n");
+            printf("    {base}_mic.wav     — microphone   (mono)\n");
+            printf("\n");
+            printf("  Post-process with: sox -M {base}_system.wav {base}_mic.wav ...\n");
             printf("\n");
             printf("  Options:\n");
-            printf("    -o file   output WAV file (default: output.wav)\n");
+            printf("    -o base   output file base name (default: based on argv[0])\n");
             printf("    -d secs   recording duration in seconds (default: until Ctrl+C)\n");
             printf("    -m        interactively select microphone input device\n");
+            printf("\n");
+            printf("  Example mixing:\n");
+            printf("    # Mix L=sys(stereo→mono), R=mic:\n");
+            printf("    sox -M output_system.wav output_mic.wav output.wav \\\n");
+            printf("        remix 1,2 1\n");
+            printf("    ffmpeg -i output_system.wav -i output_mic.wav \\\n");
+            printf("      -filter_complex \"[0:a]pan=mono|c0=FL+FR[sys];[1:a]aformat=sample_rates=48000[mic];[sys][mic]join=inputs=2:channel_layout=stereo\" \\\n");
+            printf("      output.wav\n");
             return 0;
         }
     }
+
+    if (!outputBase) {
+        char buf[1024];
+        defaultBaseName(argv[0], buf, sizeof(buf));
+        // If the tool is invoked as ./capture, default base is "capture"
+        // but we want "output" for backward compatibility.  Let the user
+        // pick: we'll use "output" as default.
+        outputBase = "output";
+    }
+
+    // Build output file paths
+    char sysPath[1024];
+    char micPath[1024];
+    snprintf(sysPath, sizeof(sysPath), "%s_system.wav", outputBase);
+    snprintf(micPath, sizeof(micPath), "%s_mic.wav", outputBase);
 
     // ---- Init ring buffers ----
     ringInit(&gSysRing, RING_BUF_SAMPLES);
     ringInit(&gMicRing, RING_BUF_SAMPLES);
 
-    // ---- Open output file ----
-    gFile = fopen(outputPath, "wb");
-    if (!gFile) {
-        fprintf(stderr, "error: cannot create '%s'\n", outputPath);
+    // ---- Open output files ----
+    gSysFile = fopen(sysPath, "wb");
+    if (!gSysFile) {
+        fprintf(stderr, "error: cannot create '%s'\n", sysPath);
         ringDestroy(&gSysRing);
         ringDestroy(&gMicRing);
         return 1;
     }
-    writeWavHeader(gFile, 0);
+
+    gMicFile = fopen(micPath, "wb");
+    if (!gMicFile) {
+        fprintf(stderr, "error: cannot create '%s'\n", micPath);
+        fclose(gSysFile);
+        ringDestroy(&gSysRing);
+        ringDestroy(&gMicRing);
+        return 1;
+    }
+
+    // Write dummy headers (will be patched at the end with real dataSize)
+    writeWavHeader(gSysFile, 0, gSampleRate, 2);
+    writeWavHeader(gMicFile, 0, gMicRate > 0 ? gMicRate : gSampleRate, 1);
 
     // ---- Create process tap + aggregate device ----
     @autoreleasepool {
@@ -600,13 +571,6 @@ int main(int argc, char **argv) {
                 printf("mic: %s (%u ch, %.0f Hz)\n",
                        selName, (unsigned)selChan, selRate);
 
-                if (selRate != gSampleRate) {
-                    fprintf(stderr,
-                        "warning: mic rate (%.0f Hz) ≠ sys rate (%.0f Hz)\n"
-                        "         — using AudioConverter SRC\n",
-                        selRate, gSampleRate);
-                }
-
                 OSStatus err = AudioDeviceCreateIOProcID(gMicID, micIOProc,
                                                          NULL, &gMicIOProcID);
                 if (err != noErr) {
@@ -621,205 +585,162 @@ int main(int argc, char **argv) {
                 kAudioHardwarePropertyDefaultInputDevice,
                 kAudioObjectPropertyScopeGlobal,
                 kAudioObjectPropertyElementMain
-        };
-        AudioObjectID defaultDev = 0;
-        UInt32 dsize = sizeof(defaultDev);
-        OSStatus err = AudioObjectGetPropertyData(kAudioObjectSystemObject,
-                                                   &defaultAddr, 0, NULL,
-                                                   &dsize, &defaultDev);
-        if (err == noErr && defaultDev != 0) {
-            // Verify it has input channels
-            AudioObjectPropertyAddress inAddr = {
-                kAudioDevicePropertyStreamConfiguration,
-                kAudioObjectPropertyScopeInput,
-                kAudioObjectPropertyElementMain
             };
-            UInt32 bufSize = 0;
-            AudioObjectGetPropertyDataSize(defaultDev, &inAddr, 0, NULL, &bufSize);
-            AudioBufferList *buflist = malloc(bufSize);
-            AudioObjectGetPropertyData(defaultDev, &inAddr, 0, NULL, &bufSize, buflist);
-            UInt32 inCh = 0;
-            for (UInt32 j = 0; j < buflist->mNumberBuffers; j++)
-                inCh += buflist->mBuffers[j].mNumberChannels;
-            free(buflist);
-
-            if (inCh > 0) {
-                // Read sample rate for warning
-                AudioObjectPropertyAddress fmtAddr = {
-                    kAudioDevicePropertyStreamFormat,
-                    kAudioObjectPropertyScopeInput,
-                    kAudioObjectPropertyElementMain
-                };
-                AudioStreamBasicDescription asbd = {};
-                UInt32 fs = sizeof(asbd);
-                AudioObjectGetPropertyData(defaultDev, &fmtAddr, 0, NULL, &fs, &asbd);
-
-                // Device name
-                char devName[256] = "";
-                AudioObjectPropertyAddress nAddr = {
-                    kAudioDevicePropertyDeviceName,
-                    kAudioObjectPropertyScopeGlobal,
-                    kAudioObjectPropertyElementMain
-                };
-                UInt32 ns = sizeof(devName) - 1;
-                AudioObjectGetPropertyData(defaultDev, &nAddr, 0, NULL, &ns, &devName);
-
-                gMicID = defaultDev;
-                gMicChannels = inCh;
-                gMicRate = asbd.mSampleRate;
-
-                printf("mic: %s (%u ch, %.0f Hz)  [default input device]\n",
-                       devName, (unsigned)inCh, asbd.mSampleRate);
-
-                if (asbd.mSampleRate != gSampleRate) {
-                    fprintf(stderr,
-                        "warning: mic rate (%.0f Hz) ≠ sys rate (%.0f Hz)\n"
-                        "         — using AudioConverter SRC\n",
-                        asbd.mSampleRate, gSampleRate);
-                }
-
-                err = AudioDeviceCreateIOProcID(gMicID, micIOProc, NULL, &gMicIOProcID);
-                if (err != noErr) {
-                    fprintf(stderr, "warning: could not open mic device — mic will be silent\n");
-                    gMicID = 0;
-                    gMicChannels = 0;
-                    gMicRate = 0;
-                }
-            } else {
-                fprintf(stderr, "warning: default input device has no input channels — mic will be silent\n");
-            }
-        }
-
-        // Fallback: scan all devices if there's no default input device
-        if (!gMicID) {
-            AudioObjectPropertyAddress addr = {
-                kAudioHardwarePropertyDevices,
-                kAudioObjectPropertyScopeGlobal,
-                kAudioObjectPropertyElementMain
-            };
-            UInt32 dataSize = 0;
-            AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, NULL, &dataSize);
-            AudioObjectID *devices = malloc(dataSize);
-            AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, &dataSize, devices);
-            UInt32 devCount = dataSize / sizeof(AudioObjectID);
-
-            AudioObjectID bestDevice = 0;
-            uint32_t     bestScore  = 0;
-            uint32_t     bestChan   = 0;
-            Float64      bestRate   = 0;
-            char         bestName[256] = "";
-
-            for (UInt32 i = 0; i < devCount; i++) {
-                AudioObjectID dev = devices[i];
-
+            AudioObjectID defaultDev = 0;
+            UInt32 dsize = sizeof(defaultDev);
+            OSStatus err = AudioObjectGetPropertyData(kAudioObjectSystemObject,
+                                                       &defaultAddr, 0, NULL,
+                                                       &dsize, &defaultDev);
+            if (err == noErr && defaultDev != 0) {
                 AudioObjectPropertyAddress inAddr = {
                     kAudioDevicePropertyStreamConfiguration,
                     kAudioObjectPropertyScopeInput,
                     kAudioObjectPropertyElementMain
                 };
                 UInt32 bufSize = 0;
-                AudioObjectGetPropertyDataSize(dev, &inAddr, 0, NULL, &bufSize);
+                AudioObjectGetPropertyDataSize(defaultDev, &inAddr, 0, NULL, &bufSize);
                 AudioBufferList *buflist = malloc(bufSize);
-                AudioObjectGetPropertyData(dev, &inAddr, 0, NULL, &bufSize, buflist);
+                AudioObjectGetPropertyData(defaultDev, &inAddr, 0, NULL, &bufSize, buflist);
                 UInt32 inCh = 0;
                 for (UInt32 j = 0; j < buflist->mNumberBuffers; j++)
                     inCh += buflist->mBuffers[j].mNumberChannels;
                 free(buflist);
-                if (inCh == 0) continue;
 
-                AudioObjectPropertyAddress tAddr = {
-                    kAudioDevicePropertyTransportType,
+                if (inCh > 0) {
+                    AudioObjectPropertyAddress fmtAddr = {
+                        kAudioDevicePropertyStreamFormat,
+                        kAudioObjectPropertyScopeInput,
+                        kAudioObjectPropertyElementMain
+                    };
+                    AudioStreamBasicDescription asbd = {};
+                    UInt32 fs = sizeof(asbd);
+                    AudioObjectGetPropertyData(defaultDev, &fmtAddr, 0, NULL, &fs, &asbd);
+
+                    char devName[256] = "";
+                    AudioObjectPropertyAddress nAddr = {
+                        kAudioDevicePropertyDeviceName,
+                        kAudioObjectPropertyScopeGlobal,
+                        kAudioObjectPropertyElementMain
+                    };
+                    UInt32 ns = sizeof(devName) - 1;
+                    AudioObjectGetPropertyData(defaultDev, &nAddr, 0, NULL, &ns, &devName);
+
+                    gMicID = defaultDev;
+                    gMicChannels = inCh;
+                    gMicRate = asbd.mSampleRate;
+
+                    printf("mic: %s (%u ch, %.0f Hz)  [default input device]\n",
+                           devName, (unsigned)inCh, asbd.mSampleRate);
+
+                    err = AudioDeviceCreateIOProcID(gMicID, micIOProc, NULL, &gMicIOProcID);
+                    if (err != noErr) {
+                        fprintf(stderr, "warning: could not open mic device — mic will be silent\n");
+                        gMicID = 0;
+                        gMicChannels = 0;
+                        gMicRate = 0;
+                    }
+                } else {
+                    fprintf(stderr, "warning: default input device has no input channels — mic will be silent\n");
+                }
+            }
+
+            // Fallback: scan all devices if there's no default input device
+            if (!gMicID) {
+                AudioObjectPropertyAddress addr = {
+                    kAudioHardwarePropertyDevices,
                     kAudioObjectPropertyScopeGlobal,
                     kAudioObjectPropertyElementMain
                 };
-                UInt32 transport = 0;
-                UInt32 ts = sizeof(transport);
-                AudioObjectGetPropertyData(dev, &tAddr, 0, NULL, &ts, &transport);
+                UInt32 dataSize = 0;
+                AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, NULL, &dataSize);
+                AudioObjectID *devices = malloc(dataSize);
+                AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, &dataSize, devices);
+                UInt32 devCount = dataSize / sizeof(AudioObjectID);
 
-                AudioObjectPropertyAddress fmtAddr = {
-                    kAudioDevicePropertyStreamFormat,
-                    kAudioObjectPropertyScopeInput,
-                    kAudioObjectPropertyElementMain
-                };
-                AudioStreamBasicDescription asbd = {};
-                UInt32 fs = sizeof(asbd);
-                AudioObjectGetPropertyData(dev, &fmtAddr, 0, NULL, &fs, &asbd);
+                AudioObjectID bestDevice = 0;
+                uint32_t     bestScore  = 0;
+                uint32_t     bestChan   = 0;
+                Float64      bestRate   = 0;
+                char         bestName[256] = "";
 
-                char devName[256] = "";
-                AudioObjectPropertyAddress nAddr = {
-                    kAudioDevicePropertyDeviceName,
-                    kAudioObjectPropertyScopeGlobal,
-                    kAudioObjectPropertyElementMain
-                };
-                UInt32 ns = sizeof(devName) - 1;
-                AudioObjectGetPropertyData(dev, &nAddr, 0, NULL, &ns, &devName);
+                for (UInt32 i = 0; i < devCount; i++) {
+                    AudioObjectID dev = devices[i];
 
-                uint32_t score = 0;
-                if (transport == kAudioDeviceTransportTypeBuiltIn) score += 100;
-                if (asbd.mSampleRate == gSampleRate)              score += 50;
-                if (asbd.mSampleRate >= 48000)                    score += 10;
+                    AudioObjectPropertyAddress inAddr = {
+                        kAudioDevicePropertyStreamConfiguration,
+                        kAudioObjectPropertyScopeInput,
+                        kAudioObjectPropertyElementMain
+                    };
+                    UInt32 bufSize = 0;
+                    AudioObjectGetPropertyDataSize(dev, &inAddr, 0, NULL, &bufSize);
+                    AudioBufferList *buflist = malloc(bufSize);
+                    AudioObjectGetPropertyData(dev, &inAddr, 0, NULL, &bufSize, buflist);
+                    UInt32 inCh = 0;
+                    for (UInt32 j = 0; j < buflist->mNumberBuffers; j++)
+                        inCh += buflist->mBuffers[j].mNumberChannels;
+                    free(buflist);
+                    if (inCh == 0) continue;
 
-                if (score > bestScore) {
-                    bestDevice = dev;
-                    bestScore  = score;
-                    bestChan   = inCh;
-                    bestRate   = asbd.mSampleRate;
-                    strncpy(bestName, devName, sizeof(bestName) - 1);
+                    AudioObjectPropertyAddress tAddr = {
+                        kAudioDevicePropertyTransportType,
+                        kAudioObjectPropertyScopeGlobal,
+                        kAudioObjectPropertyElementMain
+                    };
+                    UInt32 transport = 0;
+                    UInt32 ts = sizeof(transport);
+                    AudioObjectGetPropertyData(dev, &tAddr, 0, NULL, &ts, &transport);
+
+                    AudioObjectPropertyAddress fmtAddr = {
+                        kAudioDevicePropertyStreamFormat,
+                        kAudioObjectPropertyScopeInput,
+                        kAudioObjectPropertyElementMain
+                    };
+                    AudioStreamBasicDescription asbd = {};
+                    UInt32 fs = sizeof(asbd);
+                    AudioObjectGetPropertyData(dev, &fmtAddr, 0, NULL, &fs, &asbd);
+
+                    char devName[256] = "";
+                    AudioObjectPropertyAddress nAddr = {
+                        kAudioDevicePropertyDeviceName,
+                        kAudioObjectPropertyScopeGlobal,
+                        kAudioObjectPropertyElementMain
+                    };
+                    UInt32 ns = sizeof(devName) - 1;
+                    AudioObjectGetPropertyData(dev, &nAddr, 0, NULL, &ns, &devName);
+
+                    uint32_t score = 0;
+                    if (transport == kAudioDeviceTransportTypeBuiltIn) score += 100;
+                    if (asbd.mSampleRate == gSampleRate)              score += 50;
+                    if (asbd.mSampleRate >= 48000)                    score += 10;
+
+                    if (score > bestScore) {
+                        bestDevice = dev;
+                        bestScore  = score;
+                        bestChan   = inCh;
+                        bestRate   = asbd.mSampleRate;
+                        strncpy(bestName, devName, sizeof(bestName) - 1);
+                    }
+                }
+                free(devices);
+
+                if (bestDevice) {
+                    gMicID = bestDevice;
+                    gMicChannels = bestChan;
+                    gMicRate = bestRate;
+                    printf("mic: %s (%u ch, %.0f Hz)  [fallback scan]\n",
+                           bestName, (unsigned)bestChan, bestRate);
+
+                    err = AudioDeviceCreateIOProcID(gMicID, micIOProc, NULL, &gMicIOProcID);
+                    if (err != noErr) {
+                        fprintf(stderr, "warning: could not open mic device — mic will be silent\n");
+                        gMicID = 0;
+                        gMicChannels = 0;
+                        gMicRate = 0;
+                    }
+                } else {
+                    fprintf(stderr, "warning: no input device found — mic will be silent\n");
                 }
             }
-            free(devices);
-
-            if (bestDevice) {
-                gMicID = bestDevice;
-                gMicChannels = bestChan;
-                gMicRate = bestRate;
-                printf("mic: %s (%u ch, %.0f Hz)  [fallback scan]\n",
-                       bestName, (unsigned)bestChan, bestRate);
-
-                if (bestRate != gSampleRate) {
-                    fprintf(stderr,
-                        "warning: mic rate (%.0f Hz) ≠ sys rate (%.0f Hz)\n"
-                        "         — using AudioConverter SRC\n",
-                        bestRate, gSampleRate);
-                }
-
-                err = AudioDeviceCreateIOProcID(gMicID, micIOProc, NULL, &gMicIOProcID);
-                if (err != noErr) {
-                    fprintf(stderr, "warning: could not open mic device — mic will be silent\n");
-                    gMicID = 0;
-                    gMicChannels = 0;
-                    gMicRate = 0;
-                }
-            } else {
-                fprintf(stderr, "warning: no input device found — mic will be silent\n");
-            }
-        }
-    }
-    }
-
-    // ---- Create AudioConverter SRC if mic rate ≠ sys rate ----
-    if (gMicID && gMicChannels > 0 && gMicRate > 0
-        && gSampleRate > 0 && gMicRate != gSampleRate) {
-        AudioStreamBasicDescription inFmt  = { 0 };
-        AudioStreamBasicDescription outFmt = { 0 };
-
-        inFmt.mFormatID         = kAudioFormatLinearPCM;
-        inFmt.mFormatFlags      = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
-        inFmt.mBitsPerChannel   = 32;
-        inFmt.mFramesPerPacket  = 1;
-        inFmt.mChannelsPerFrame = 1;
-        inFmt.mBytesPerFrame    = 4;
-        inFmt.mBytesPerPacket   = 4;
-        inFmt.mSampleRate       = gMicRate;
-
-        outFmt = inFmt;
-        outFmt.mSampleRate = gSampleRate;
-
-        OSStatus err = AudioConverterNew(&inFmt, &outFmt, &gMicConverter);
-        if (err != noErr) {
-            fprintf(stderr, "warning: could not create AudioConverter — "
-                            "mic will use sample-and-hold\n");
-            gMicConverter = NULL;
         }
     }
 
@@ -849,13 +770,13 @@ int main(int argc, char **argv) {
         }
     }
 
-    printf("recording  ⇢  %s   [Ctrl+C to stop]\n", outputPath);
+    printf("\nrecording  ⇢  %s  and  %s   [Ctrl+C to stop]\n", sysPath, micPath);
     fflush(stdout);
 
     signal(SIGINT,  onSignal);
     signal(SIGTERM, onSignal);
 
-    // ---- Write loop (replaces the old sleep loop) ----
+    // ---- Write loop (drains both rings independently) ----
     writeLoop(duration);
 
     // ---- Stop & tear down ----
@@ -868,28 +789,27 @@ int main(int argc, char **argv) {
         AudioDeviceStop(gMicID, gMicIOProcID);
         AudioDeviceDestroyIOProcID(gMicID, gMicIOProcID);
     }
-    if (gMicConverter) {
-        AudioConverterDispose(gMicConverter);
-        gMicConverter = NULL;
-    }
 
     ringDestroy(&gSysRing);
     ringDestroy(&gMicRing);
 
-    // ---- Patch WAV header ----
-    writeWavHeader(gFile, gDataSize);
-    fclose(gFile);
+    // ---- Patch WAV headers with actual data sizes ----
+    writeWavHeader(gSysFile, gSysDataSize, gSampleRate, 2);
+    writeWavHeader(gMicFile, gMicDataSize, gMicRate > 0 ? gMicRate : gSampleRate, 1);
 
-    printf("done — %zu bytes  →  %s\n", gDataSize, outputPath);
+    fclose(gSysFile);
+    fclose(gMicFile);
+
+    printf("\ndone — system: %zu bytes, mic: %zu bytes\n",
+           gSysDataSize, gMicDataSize);
+    printf("  system: %s\n", sysPath);
+    printf("  mic:    %s\n", micPath);
     return 0;
 
 cleanup:
-    if (gMicConverter) {
-        AudioConverterDispose(gMicConverter);
-        gMicConverter = NULL;
-    }
     ringDestroy(&gSysRing);
     ringDestroy(&gMicRing);
-    fclose(gFile);
+    if (gSysFile) fclose(gSysFile);
+    if (gMicFile) fclose(gMicFile);
     return 1;
 }

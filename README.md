@@ -1,14 +1,15 @@
 # record — macOS System Audio + Microphone Recorder
 
 Captures **system audio** (speaker output) and **microphone** simultaneously
-and saves them as a single 48 kHz 16‑bit **WAV** file.
+and saves them as two separate 16‑bit **WAV** files:
 
-**Channel layout:**
+- `{base}_system.wav` — system audio (stereo, at the aggregate device rate)
+- `{base}_mic.wav`    — microphone (mono, at the mic's native rate)
 
-| Channel | Content |
-|---------|---------|
-| L       | System audio (stereo mixed to mono) |
-| R       | Microphone (mono) |
+The two tracks are **not mixed in real time**.  Each is recorded
+independently at its own sample rate, which avoids the crackling and
+clock‑drift artifacts that plague real-time mixing.  Use the included
+`mix.sh` script to align and merge them into a mono MP3 afterwards.
 
 Uses only **CoreAudio** — no third-party drivers, no kernel extensions, no
 BlackHole, no Soundflower.
@@ -17,6 +18,7 @@ BlackHole, no Soundflower.
 
 - **macOS 14.2+** (Sonoma or later)
 - Xcode Command Line Tools (`xcode-select --install`)
+- **SoX** or **ffmpeg** for post-processing (`brew install sox`)
 
 ## Build
 
@@ -33,19 +35,19 @@ cc -o capture capture.m -framework CoreAudio -framework Foundation
 ## Usage
 
 ```sh
-./capture                               # record to output.wav, stop with Ctrl+C
-./capture -o test.wav                   # custom output file
+./capture                               # record to output_system.wav + output_mic.wav
+./capture -o recording                  # custom base name
 ./capture -d 10                         # record for 10 seconds
-./capture -o test.wav -d 5              # both
+./capture -o test -d 5                  # both
 ./capture -m                            # interactively select microphone
-./capture -m -o test.wav -d 10          # interactive mic + custom options
+./capture -m -o test -d 10              # interactive mic + custom options
 ```
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
-| `-o file` | Output WAV file (default: `output.wav`) |
+| `-o base` | Output file base name (default: `output`) |
 | `-d secs` | Recording duration in seconds (default: until Ctrl+C) |
 | `-m`      | Interactively select the microphone input device |
 
@@ -65,8 +67,44 @@ Select microphone [1-5]:
 
 Without `-m`, the default system input device is used automatically.
 
-If no microphone is available (e.g. Mac Mini with no input device), the R
-channel will be silence and a warning is printed.
+If no microphone is available (e.g. Mac Mini with no input device), the
+mic file will contain silence and a warning is printed.
+
+## Post‑processing
+
+After recording, use the included `mix.sh` script to produce a mono MP3:
+
+```sh
+./mix.sh output_system.wav output_mic.wav output.mp3
+```
+
+`mix.sh` automatically:
+
+1. **Detects clock drift** by comparing the sample counts of both tracks
+2. **Corrects drift** using SoX's `tempo -s` (pitch-preserving, optimised for speech)
+3. **Mixes equally** — system and microphone at the same level
+4. **Encodes to MP3** at 128 kbps, 48 kHz, mono
+
+For a quick example:
+
+```sh
+./capture -d 10          # record 10 seconds
+./mix.sh output_system.wav output_mic.wav output.mp3
+play output.mp3          # listen back
+```
+
+### Manual SoX alternative
+
+```sh
+# Align mic to system duration
+TEMPO=$(echo "scale=10; $(soxi -s output_system.wav) / $(soxi -s output_mic.wav)" | bc -l)
+sox output_mic.wav mic_aligned.wav tempo -s $(echo "scale=10; 1/$TEMPO" | bc -l)
+
+# Mix to mono (equal parts) and encode to MP3
+sox -M output_system.wav mic_aligned.wav -C 128 output.mp3 remix 1v0.25,2v0.25,3v0.5
+
+rm -f mic_aligned.wav
+```
 
 ## How it works
 
@@ -79,14 +117,11 @@ channel will be silence and a warning is printed.
    A second **I/O procedure** is registered on the chosen device.
 3. **Ring buffers**: Both IOProcs write Float32 samples into separate
    lock‑free SPSC ring buffers — no file I/O on the real‑time threads.
-4. **Write loop**: A polling loop drains both ring buffers, mixes system
-   audio to mono, interleaves L=sys R=mic, converts to SInt16, and appends
-   to the WAV file.
-5. **Clock drift**: The system tap serves as the reference clock. If the
-   microphone ring buffer has fewer frames (slower clock), the R channel is
-   padded with silence; if it has more (faster clock), excess samples
-   accumulate and are trimmed at a watermark. This handles built‑in,
-   Bluetooth, and USB devices without external sample‑rate conversion.
+4. **Write loop**: A polling loop drains each ring buffer independently
+   and writes the raw PCM data to its own WAV file.  No mixing, no sample‑rate
+   conversion, no inter‑channel synchronization.
+5. **Post‑processing**: The separate tracks are aligned via sample‑count
+   ratio and mixed to a mono MP3 with SoX or ffmpeg.
 
 ## Permissions
 
@@ -96,18 +131,13 @@ Privacy & Security → Audio Capture**.
 
 For microphone recording, macOS will also prompt for **Microphone** access.
 
-## File format
+## File formats
 
-| Property       | Value          |
-|----------------|----------------|
-| Sample rate    | 48 000 Hz *    |
-| Channels       | 2 (split)      |
-| Bit depth      | 16             |
-| Encoding       | PCM (WAV)      |
-
-\* Sample rate is read from the system audio aggregate device. The
-microphone's native rate is accepted as‑is; any rate mismatch is handled
-by the ring‑buffer drift compensation.
+| File          | Sample rate       | Channels | Encoding |
+|---------------|-------------------|----------|----------|
+| Raw system    | Aggregate device  | 2        | PCM WAV  |
+| Raw mic       | Mic's native rate | 1        | PCM WAV  |
+| Mix output    | 48 000 Hz         | 1        | MP3 128k |
 
 ## License
 

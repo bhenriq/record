@@ -69,7 +69,7 @@ struct TranscribeConfig {
     var micWavOverride: String?
     var transcriptOverride: String?
 
-    var systemWav: String { systemWavOverride ?? "\(outputDir)/\(baseName)_system.wav" }
+    var systemWav: String { systemWavOverride ?? "\(outputDir)/\(baseName)_sys.wav" }
     var micWav: String { micWavOverride ?? "\(outputDir)/\(baseName)_mic.wav" }
     var outputPath: String { transcriptOverride ?? "\(outputDir)/\(baseName)_transcript.\(format.rawValue)" }
 }

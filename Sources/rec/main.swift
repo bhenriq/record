@@ -391,7 +391,7 @@ Captures system audio and microphone to separate WAV files.
 Writes to a temp dir (or --output-dir if specified).
 
 Flags:
-  -o <name>       Output base name → <name>_system.wav  <name>_mic.wav
+  -o <name>       Output base name → <name>_sys.wav  <name>_mic.wav
   -d <secs>       Recording duration (default: until Ctrl+C)
   -m              Interactively select microphone input device
   --output-dir <path>  Output directory (default: temp dir)
@@ -420,7 +420,7 @@ Examples:
     }
     try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
-    let sysPath = "\(outDir)/\(baseName)_system.wav"
+    let sysPath = "\(outDir)/\(baseName)_sys.wav"
     let micPath = "\(outDir)/\(baseName)_mic.wav"
 
     do {
@@ -494,7 +494,7 @@ Transcribes system and mic WAVs independently using yap, then merges
 segments chronologically with speaker labels (Me / Them).
 
 Input files (defaults can be overridden):
-  ./<name>_system.wav    or    --sys <path>
+  ./<name>_sys.wav    or    --sys <path>
   ./<name>_mic.wav       or    --mic <path>
 
 Output: ./<name>_transcript.<ext>

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rec — record system audio + mic, mix to mono MP3, transcribe with speaker labels
+# rec — record system audio + mic, mix to stereo MP3 (mic left, system right), transcribe with speaker labels
 #
 # One entry point for the entire pipeline.  Can be used interactively
 # (source'd for functions + zsh completions) or executed directly.
@@ -14,7 +14,7 @@
 #
 # Subcommands:
 #   rec capture [opts]           just capture (calls ./capture)
-#   rec mix <sys> <mic> <out>    just mix to mono MP3
+#   rec mix <sys> <mic> <out>    just mix to stereo MP3
 #   rec transcribe [opts]        just transcribe existing WAVs
 #
 # Source in .zshrc for tab completions:
@@ -64,7 +64,7 @@ rec_capture() {
 }
 
 # ==============================================================
-#  rec mix  —  drift-correct and mix to mono MP3
+#  rec mix  —  drift-correct and mix to stereo MP3 (mic left, system right)
 # ==============================================================
 rec_mix() {
     if [[ $# -lt 3 ]]; then
@@ -141,14 +141,14 @@ rec_mix() {
 
     # -- mix --
     if has_sox; then
-        echo "Mixing to mono MP3 with SoX (128k)..." >&2
-        sox -M "$sys" "$mic_final" -C 128 "$out" remix 1v0.25,2v0.25,3v0.5
+        echo "Mixing to stereo MP3 with SoX (128k, mic left, system right)..." >&2
+        sox -M "$sys" "$mic_final" -C 128 "$out" remix 3, 1v0.5,2v0.5
     else
-        echo "Mixing to mono MP3 with ffmpeg (128k)..." >&2
+        echo "Mixing to stereo MP3 with ffmpeg (128k, mic left, system right)..." >&2
         ffmpeg -i "$sys" -i "$mic_final" \
-            -filter_complex "[0:a]pan=mono|c0=0.5*FL+0.5*FR[sys]; \
+            -filter_complex "[0:a]pan=mono|c0=0.5*FL+0.5*FR[sys_mono]; \
                              [1:a]aformat=sample_rates=${sys_rate}[mic]; \
-                             [sys][mic]amix=inputs=2:duration=first:weights=0.5 0.5[a]" \
+                             [mic][sys_mono]amerge=inputs=2[a]" \
             -map "[a]" -c:a libmp3lame -b:a 128k -y "$out" 2>/dev/null
     fi
 
@@ -359,7 +359,7 @@ rec_help() {
 Usage:
   rec [OPTIONS]                        Full pipeline: capture -> mix -> transcribe
   rec capture [OPTS]                   Just capture (calls ./capture)
-  rec mix <sys.wav> <mic.wav> <out>    Just mix tracks to mono MP3
+  rec mix <sys.wav> <mic.wav> <out>    Just mix tracks to stereo MP3 (mic left, system right)
   rec transcribe [OPTS]                Just transcribe existing WAVs
 
 Full-pipeline options:
@@ -447,7 +447,7 @@ if [[ -n "${ZSH_VERSION:-}" ]]; then
     _rec() {
         local -a subcmds=(
             'capture:Record system audio and microphone'
-            'mix:Mix system and mic tracks into mono MP3'
+            'mix:Mix system and mic tracks into stereo MP3 (mic left, system right)'
             'transcribe:Transcribe recordings with speaker labels'
         )
 

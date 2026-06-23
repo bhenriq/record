@@ -1,7 +1,7 @@
 # record — macOS System Audio + Microphone Recorder
 
 All-in-one toolchain to **record**, **mix**, and **transcribe** system audio
-and microphone on macOS.  One command gives you a mono MP3 *and* a
+and microphone on macOS.  One command gives you a stereo MP3 (mic on left channel, system audio on right) *and* a
 speaker-labeled transcript.
 
 - `rec` — unified entry point (capture → mix → transcribe)
@@ -54,7 +54,7 @@ rec -d 15 --vtt --locale fr-FR               # WebVTT in French
 
 Runs all three stages in sequence:
 1. **Capture** — record system + mic to separate WAV files
-2. **Mix** — align clock drift, mix to mono MP3 (`{base}.mp3`)
+2. **Mix** — align clock drift, mix to stereo MP3 — mic left, system right (`{base}.mp3`)
 3. **Transcribe** — speech-to-text with speaker labels (`{base}_transcript.*`)
 
 ### Subcommands
@@ -105,7 +105,9 @@ mic file will contain silence and a warning is printed.
 
 ## Mixing — `rec mix` / `mix.sh`
 
-Produces a mono MP3 from the two WAV files, correcting clock drift automatically:
+Produces a stereo MP3 from the two WAV files, correcting clock drift automatically.
+The microphone goes to the **left channel**, system audio to the **right channel** —
+so you can pan left/right to isolate either source.
 
 ```sh
 rec mix output_system.wav output_mic.wav output.mp3
@@ -116,8 +118,8 @@ rec mix output_system.wav output_mic.wav output.mp3
 
 1. **Detects clock drift** by comparing the sample counts of both tracks
 2. **Corrects drift** using SoX's `tempo -s` (pitch-preserving, optimised for speech)
-3. **Mixes equally** — system and microphone at the same level
-4. **Encodes to MP3** at 128 kbps, 48 kHz, mono
+3. **Assigns channels** — mic → left, system → right
+4. **Encodes to MP3** at 128 kbps, 48 kHz, stereo
 
 ## Transcription — `rec transcribe` / `transcribe.sh`
 
@@ -162,11 +164,16 @@ How it works:
 TEMPO=$(echo "scale=10; $(soxi -s output_system.wav) / $(soxi -s output_mic.wav)" | bc -l)
 sox output_mic.wav mic_aligned.wav tempo -s $(echo "scale=10; 1/$TEMPO" | bc -l)
 
-# Mix to mono (equal parts) and encode to MP3
-sox -M output_system.wav mic_aligned.wav -C 128 output.mp3 remix 1v0.25,2v0.25,3v0.5
+# Mix to stereo (mic left, system right) and encode to MP3
+sox -M output_system.wav mic_aligned.wav -C 128 output.mp3 remix 3, 1v0.5,2v0.5
 
 rm -f mic_aligned.wav
 ```
+
+> **Stereo layout explained:** `-M` merges the two input files into a 3-channel
+> intermediate (system L, system R, mic).  `remix 3, 1v0.5,2v0.5` maps:
+> - **Left channel** = input 3 (mic) at full volume
+> - **Right channel** = input 1 (sys L) × 0.5 + input 2 (sys R) × 0.5 (system summed to mono)
 
 ## How it works
 
@@ -183,7 +190,7 @@ rm -f mic_aligned.wav
    and writes the raw PCM data to its own WAV file.  No mixing, no sample‑rate
    conversion, no inter‑channel synchronization.
 5. **Post‑processing**: The separate tracks are aligned via sample‑count
-   ratio and mixed to a mono MP3 with SoX or ffmpeg.
+   ratio and mixed to a stereo MP3 (mic left, system right) with SoX or ffmpeg.
 
 ## Permissions
 
@@ -195,11 +202,11 @@ For microphone recording, macOS will also prompt for **Microphone** access.
 
 ## File formats
 
-| File          | Sample rate       | Channels | Encoding |
-|---------------|-------------------|----------|----------|
-| Raw system    | Aggregate device  | 2        | PCM WAV  |
-| Raw mic       | Mic's native rate | 1        | PCM WAV  |
-| Mix output    | 48 000 Hz         | 1        | MP3 128k |
+| File          | Sample rate       | Channels | Encoding | Layout                  |
+|---------------|-------------------|----------|----------|-------------------------|
+| Raw system    | Aggregate device  | 2        | PCM WAV  | stereo                  |
+| Raw mic       | Mic's native rate | 1        | PCM WAV  | mono                    |
+| Mix output    | 48 000 Hz         | 2        | MP3 128k | left=mic, right=system  |
 
 ## Zsh completions
 

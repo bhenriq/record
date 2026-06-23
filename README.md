@@ -26,6 +26,7 @@ cat output_transcript.txt
 - **SoX** or **ffmpeg** for post-processing (`brew install sox`)
 - **yap** for speech transcription (`brew install yap`)
 - **jq** for JSON merging (`brew install jq`)
+- **pi** for AI-powered transcript summarization (`npm install -g @earendil-works/pi-coding-agent`)
 
 ## Build
 
@@ -189,6 +190,8 @@ How it works:
 
 - **pi** — the pi coding agent CLI (`npm install -g @earendil-works/pi-coding-agent`)
 - **jq** — JSON processor (already needed by transcription)
+
+> **Note:** pi requires its own API key or subscription. See the [pi docs](https://github.com/earendil-works/pi-coding-agent) for setup.
 
 ## Manual SoX alternative
 

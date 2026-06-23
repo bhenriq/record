@@ -19,6 +19,8 @@ BlackHole, no Soundflower.
 - **macOS 14.2+** (Sonoma or later)
 - Xcode Command Line Tools (`xcode-select --install`)
 - **SoX** or **ffmpeg** for post-processing (`brew install sox`)
+- **yap** for speech transcription (`brew install yap`)
+- **jq** for JSON merging (`brew install jq`)
 
 ## Build
 
@@ -93,7 +95,47 @@ For a quick example:
 play output.mp3          # listen back
 ```
 
-### Manual SoX alternative
+### Transcription
+
+After recording and mixing, create a speaker-labeled transcript of both
+tracks using the included `transcribe.sh` script:
+
+```sh
+./transcribe.sh                          # output_transcript.txt
+./transcribe.sh -o recording             # custom base name
+./transcribe.sh -o recording --srt       # SRT subtitles
+./transcribe.sh -o recording --vtt       # WebVTT subtitles with speaker labels
+./transcribe.sh -o recording --json      # full merged JSON with word timestamps
+./transcribe.sh --censor                 # redact sensitive words
+./transcribe.sh --locale fr-FR           # specify locale
+```
+
+`transcribe.sh` works by:
+
+1. **Transcribing each source independently** with `yap transcribe --json --word-timestamps`
+2. **Correcting clock drift** using the same sample‑count ratio as `mix.sh`
+3. **Merging chronologically** — all segments from both speakers are
+   interleaved by timestamp and labeled `[System]` or `[Mic]`
+
+This produces a true conversation transcript showing who said what and when,
+without needing a live transcription session.
+
+### Output formats
+
+| Format | Description | Example |
+|--------|-------------|---------|
+| `txt` (default) | Plain text with `[Speaker MM:SS.X]` prefix | `[Mic 00:01.2] Hi there` |
+| `srt` | SubRip subtitles with speaker prefix | `[System] Welcome everyone` |
+| `vtt` | WebVTT format, suitable for browsers | `[Mic] Thanks for having me` |
+| `json` | Full merged data structure with speaker on every segment/word | Machine-readable |
+
+### Dependencies
+
+- **yap** — on-device speech transcription (`brew install yap`)
+- **jq** — JSON processor (`brew install jq`)
+- **sox** or **ffmpeg** — for sample-count metadata (already needed by `mix.sh`)
+
+## Manual SoX alternative
 
 ```sh
 # Align mic to system duration

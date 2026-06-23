@@ -4,3 +4,5 @@ capture.dSYM/
 *.mp3
 *.flac
 *.aac
+*_transcript.*
+test.json

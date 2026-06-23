@@ -1,4 +1,0 @@
-module CBridge {
-    umbrella "/Users/bhq/Library/Mobile Documents/com~apple~CloudDocs/Programming/record/Sources/CBridge/include"
-    export *
-}

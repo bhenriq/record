@@ -6,3 +6,4 @@ capture.dSYM/
 *.aac
 *_transcript.*
 test.json
+*.swp

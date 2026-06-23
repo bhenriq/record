@@ -1,0 +1,508 @@
+#!/usr/bin/env bash
+# rec — record system audio + mic, mix to mono MP3, transcribe with speaker labels
+#
+# One entry point for the entire pipeline.  Can be used interactively
+# (source'd for functions + zsh completions) or executed directly.
+#
+# Usage:
+#   rec                    # full pipeline: capture → mix → transcribe
+#   rec -d 10              # record 10s, then mix + transcribe
+#   rec -d 30 -o meeting   # custom base name
+#   rec -d 10 -m           # interactive mic selection
+#   rec --srt --censor     # SRT with censoring
+#   rec --vtt --locale fr-FR
+#
+# Subcommands:
+#   rec capture [opts]           just capture (calls ./capture)
+#   rec mix <sys> <mic> <out>    just mix to mono MP3
+#   rec transcribe [opts]        just transcribe existing WAVs
+#
+# Source in .zshrc for tab completions:
+#   source /path/to/rec
+
+# ---- Script directory ----
+if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    REC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    REC_DIR="$(cd "$(dirname "$0")" && pwd 2>/dev/null || echo ".")"
+fi
+
+# ---- Utilities ----
+die()   { echo "Error: $*" >&2; exit 1; }
+warn()  { echo "Warning: $*" >&2; }
+has()   { command -v "$1" &>/dev/null; }
+has_sox()    { has sox; }
+has_ffprobe() { has ffprobe; }
+
+check_audio_tool() {
+    has_sox && return 0
+    has_ffprobe && return 0
+    die "need 'sox' or 'ffmpeg'. Install: brew install sox"
+}
+
+get_samples() {
+    local f="$1"
+    if has_sox; then
+        soxi -s "$f" 2>/dev/null || die "cannot read samples from $f"
+    else
+        ffprobe -v error -show_entries stream=nb_samples \
+            -of default=noprint_wrappers=1:nokey=1 "$f" 2>/dev/null \
+            || die "cannot read samples from $f"
+    fi
+}
+
+# ==============================================================
+#  rec capture  —  thin wrapper around ./capture
+# ==============================================================
+rec_capture() {
+    local bin="$REC_DIR/capture"
+    if [[ ! -x "$bin" ]]; then
+        echo "Building capture..." >&2
+        (cd "$REC_DIR" && make capture) || die "build failed. Try: cd '$REC_DIR' && make"
+    fi
+    "$bin" "$@"
+}
+
+# ==============================================================
+#  rec mix  —  drift-correct and mix to mono MP3
+# ==============================================================
+rec_mix() {
+    if [[ $# -lt 3 ]]; then
+        echo "Usage: rec mix <system.wav> <mic.wav> <output.mp3>" >&2
+        return 1
+    fi
+
+    local sys="$1" mic="$2" out="$3"
+    local drift_threshold="0.0001"
+
+    [[ -f "$sys" ]] || die "system WAV not found: $sys"
+    [[ -f "$mic" ]] || die "mic WAV not found: $mic"
+    check_audio_tool
+
+    echo "System: $sys" >&2
+    echo "Mic:    $mic" >&2
+    echo "Output: $out" >&2
+    echo >&2
+
+    # -- metadata --
+    local sys_rate mic_rate sys_samples mic_samples
+    if has_sox; then
+        sys_rate=$(soxi -r "$sys")
+        mic_rate=$(soxi -r "$mic")
+        sys_samples=$(soxi -s "$sys")
+        mic_samples=$(soxi -s "$mic")
+    else
+        sys_rate=$(ffprobe -v error -show_entries stream=sample_rate \
+            -of default=noprint_wrappers=1:nokey=1 "$sys")
+        mic_rate=$(ffprobe -v error -show_entries stream=sample_rate \
+            -of default=noprint_wrappers=1:nokey=1 "$mic")
+        sys_samples=$(ffprobe -v error -show_entries stream=nb_samples \
+            -of default=noprint_wrappers=1:nokey=1 "$sys")
+        mic_samples=$(ffprobe -v error -show_entries stream=nb_samples \
+            -of default=noprint_wrappers=1:nokey=1 "$mic")
+    fi
+
+    local sys_secs mic_secs
+    sys_secs=$(echo "scale=3; $sys_samples / $sys_rate" | bc -l)
+    mic_secs=$(echo "scale=3; $mic_samples / $mic_rate" | bc -l)
+
+    echo "  rate: ${sys_rate} Hz   samples: ${sys_samples}   duration: ${sys_secs}s" >&2
+    echo "  rate: ${mic_rate} Hz   samples: ${mic_samples}   duration: ${mic_secs}s" >&2
+
+    # -- drift correction --
+    local ratio drift
+    ratio=$(echo "scale=10; $sys_samples / $mic_samples" | bc -l)
+    drift=$(echo "scale=10; if ($ratio > 1) $ratio - 1 else 1 - $ratio" | bc -l)
+
+    local mic_final="$mic"
+    local mic_aligned=""
+
+    if (( $(echo "$drift > $drift_threshold" | bc -l) )); then
+        echo >&2
+        echo "  Clock drift detected: ${drift} (ratio ${ratio})" >&2
+        echo "  Correcting by stretching/compressing mic track..." >&2
+
+        local tempo
+        tempo=$(echo "scale=10; 1 / $ratio" | bc -l)
+        mic_aligned="$(mktemp /tmp/rec_mic_$$.XXXXXXXXXX.wav)" || die "temp file creation failed"
+
+        if has_sox; then
+            sox "$mic" "$mic_aligned" tempo -s "$tempo"
+        else
+            ffmpeg -i "$mic" -filter:a "atempo=${tempo}" -y "$mic_aligned" 2>/dev/null
+        fi
+
+        mic_final="$mic_aligned"
+        echo "  Drift correction applied (tempo factor: $tempo)" >&2
+    else
+        echo "  No significant drift detected" >&2
+    fi
+    echo >&2
+
+    # -- mix --
+    if has_sox; then
+        echo "Mixing to mono MP3 with SoX (128k)..." >&2
+        sox -M "$sys" "$mic_final" -C 128 "$out" remix 1v0.25,2v0.25,3v0.5
+    else
+        echo "Mixing to mono MP3 with ffmpeg (128k)..." >&2
+        ffmpeg -i "$sys" -i "$mic_final" \
+            -filter_complex "[0:a]pan=mono|c0=0.5*FL+0.5*FR[sys]; \
+                             [1:a]aformat=sample_rates=${sys_rate}[mic]; \
+                             [sys][mic]amix=inputs=2:duration=first:weights=0.5 0.5[a]" \
+            -map "[a]" -c:a libmp3lame -b:a 128k -y "$out" 2>/dev/null
+    fi
+
+    [[ -n "$mic_aligned" ]] && rm -f "$mic_aligned"
+    echo "Done: $out" >&2
+}
+
+# ==============================================================
+#  rec transcribe  —  transcribe both WAVs, merge with speaker labels
+# ==============================================================
+rec_transcribe() {
+    local base="output" format="txt"
+    local yap_opts=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o)          base="$2"; shift 2 ;;
+            --txt)       format="txt"; shift ;;
+            --srt)       format="srt"; shift ;;
+            --vtt)       format="vtt"; shift ;;
+            --json)      format="json"; shift ;;
+            --censor)    yap_opts+=(--censor); shift ;;
+            --locale)    yap_opts+=(--locale "$2"); shift 2 ;;
+            -h|--help)
+                echo "Usage: rec transcribe [-o base] [--txt|--srt|--vtt|--json] [--censor] [--locale L]" >&2
+                return 0
+                ;;
+            *) echo "rec transcribe: unknown option $1" >&2; return 1 ;;
+        esac
+    done
+
+    local sys="${base}_system.wav"
+    local mic="${base}_mic.wav"
+    local out="${base}_transcript.${format}"
+
+    has yap || die "'yap' not found. Install: brew install yap"
+    has jq  || die "'jq' not found. Install: brew install jq"
+    check_audio_tool
+
+    local sys_exists=0 mic_exists=0
+    [[ -f "$sys" ]] && sys_exists=1
+    [[ -f "$mic" ]] && mic_exists=1
+    if [[ "$sys_exists" -eq 0 && "$mic_exists" -eq 0 ]]; then
+        die "neither $sys nor $mic found"
+    fi
+
+    echo "Inputs:" >&2
+    [[ "$sys_exists" -eq 1 ]] && echo "  system:  $sys" >&2
+    [[ "$mic_exists" -eq 1 ]] && echo "  mic:     $mic" >&2
+    echo "  format:  $format" >&2
+    echo "  output:  $out" >&2
+
+    local tmpdir
+    tmpdir="$(mktemp -d)" || die "cannot create temp directory"
+    local sys_json="$tmpdir/system.json"
+    local mic_json="$tmpdir/mic.json"
+    local merged_json="$tmpdir/merged.json"
+
+    # ---- Phase 1: transcribe ----
+    if [[ "$sys_exists" -eq 1 ]]; then
+        echo "  transcribing system audio..." >&2
+        yap transcribe --json --word-timestamps "${yap_opts[@]}" "$sys" -o "$sys_json" >/dev/null
+    fi
+    if [[ "$mic_exists" -eq 1 ]]; then
+        echo "  transcribing microphone..." >&2
+        yap transcribe --json --word-timestamps "${yap_opts[@]}" "$mic" -o "$mic_json" >/dev/null
+    fi
+
+    # ---- Phase 2: drift ratio ----
+    local ratio="1.0"
+    if [[ "$sys_exists" -eq 1 && "$mic_exists" -eq 1 ]]; then
+        local sn sm
+        sn=$(get_samples "$sys")
+        sm=$(get_samples "$mic")
+        if [[ "$sm" -ne 0 ]]; then
+            ratio=$(echo "scale=10; $sn / $sm" | bc -l)
+            local drift
+            drift=$(echo "scale=10; if ($ratio > 1) $ratio - 1 else 1 - $ratio" | bc -l)
+            if (( $(echo "$drift > 0.0001" | bc -l) )); then
+                echo "  drift correction: ratio=${ratio}" >&2
+            else
+                echo "  no significant drift detected" >&2
+            fi
+        fi
+    fi
+
+    # ---- Phase 3: merge with jq ----
+    local jq_merge='def nz(v): v // 0;
+
+{
+  metadata: {
+    created: (.[0].metadata.created),
+    duration: ([nz(.[0].metadata.duration), (nz(.[1].metadata.duration) * ($ratio | tonumber))] | max),
+    language: (.[0].metadata.language // "unknown"),
+    sources: ["system", "mic"]
+  },
+  segments: (
+    ([.[0].segments[] | . + {speaker: "System"}] +
+     [.[1].segments[] | . + {speaker: "Mic",
+       start: (nz(.start) * ($ratio | tonumber)),
+       end:   (nz(.end)   * ($ratio | tonumber)),
+       words: [.words[] | {
+         text: .text,
+         start: (nz(.start) * ($ratio | tonumber)),
+         end:   (nz(.end)   * ($ratio | tonumber))
+       }]
+     }]) |
+    sort_by(.start) |
+    to_entries | map(.value.id = (.key + 1) | .value)
+  )
+}'
+
+    local jq_pass='{
+  metadata: .metadata + {sources: [$source]},
+  segments: [.segments[] | . + {speaker: $source}]
+}'
+
+    if [[ "$sys_exists" -eq 1 && "$mic_exists" -eq 1 ]]; then
+        jq -s --arg ratio "$ratio" "$jq_merge" "$sys_json" "$mic_json" > "$merged_json"
+    elif [[ "$sys_exists" -eq 1 ]]; then
+        jq --arg source "System" "$jq_pass" "$sys_json" > "$merged_json"
+    else
+        jq --arg source "Mic" "$jq_pass" "$mic_json" > "$merged_json"
+    fi
+
+    # ---- Phase 4: format output ----
+    case "$format" in
+        json)
+            cat "$merged_json" > "$out"
+            ;;
+        txt)
+            jq -r '.segments[] | [.speaker, (.start | tostring), .text] | @tsv' "$merged_json" |
+            awk -F'\t' '
+            function fmt_time(s) {
+                m = int((s % 3600) / 60)
+                sec = int(s % 60)
+                dec = int((s - int(s)) * 10)
+                return sprintf("%02d:%02d.%d", m, sec, dec)
+            }
+            { printf("[%s %s] %s\n", $1, fmt_time($2 + 0), $3) }' > "$out"
+            ;;
+        srt)
+            jq -r '.segments[] | [.id, (.start | tostring), (.end | tostring), .speaker, .text] | @tsv' "$merged_json" |
+            awk -F'\t' '
+            function fmt_srt(s) {
+                h = int(s / 3600)
+                m = int((s % 3600) / 60)
+                sec = int(s % 60)
+                ms = int((s - int(s)) * 1000)
+                return sprintf("%02d:%02d:%02d,%03d", h, m, sec, ms)
+            }
+            {
+                printf("%d\n%s --> %s\n[%s] %s\n\n", $1, fmt_srt($2 + 0), fmt_srt($3 + 0), $4, $5)
+            }' > "$out"
+            ;;
+        vtt)
+            printf "WEBVTT\n\n" > "$out"
+            jq -r '.segments[] | [.id, (.start | tostring), (.end | tostring), .speaker, .text] | @tsv' "$merged_json" |
+            awk -F'\t' '
+            function fmt_vtt(s) {
+                h = int(s / 3600)
+                m = int((s % 3600) / 60)
+                sec = int(s % 60)
+                ms = int((s - int(s)) * 1000)
+                return sprintf("%02d:%02d:%02d.%03d", h, m, sec, ms)
+            }
+            {
+                printf("%s --> %s\n[%s] %s\n\n", fmt_vtt($2 + 0), fmt_vtt($3 + 0), $4, $5)
+            }' >> "$out"
+            ;;
+    esac
+
+    rm -rf "$tmpdir"
+    echo "Done: $out" >&2
+}
+
+# ==============================================================
+#  rec  —  main dispatch
+# ==============================================================
+rec() {
+    case "${1:-}" in
+        -h|--help)
+            rec_help
+            ;;
+        capture|mix|transcribe)
+            local cmd="$1"; shift
+            # Intercept -h/--help for subcommands (the binary may not support it)
+            if [[ "$#" -gt 0 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
+                case "$cmd" in
+                    capture)   echo "Usage: rec capture [-o base] [-d secs] [-m]" >&2; return 0 ;;
+                    mix)       echo "Usage: rec mix <system.wav> <mic.wav> <output.mp3>" >&2; return 0 ;;
+                    transcribe) echo "Usage: rec transcribe [-o base] [--txt|--srt|--vtt|--json] [--censor] [--locale L]" >&2; return 0 ;;
+                esac
+            fi
+            "rec_$cmd" "$@"
+            ;;
+        *)
+            rec_full "$@"
+            ;;
+    esac
+}
+
+# ==============================================================
+#  rec  —  help text
+# ==============================================================
+rec_help() {
+    cat >&2 <<'EOF'
+Usage:
+  rec [OPTIONS]                        Full pipeline: capture -> mix -> transcribe
+  rec capture [OPTS]                   Just capture (calls ./capture)
+  rec mix <sys.wav> <mic.wav> <out>    Just mix tracks to mono MP3
+  rec transcribe [OPTS]                Just transcribe existing WAVs
+
+Full-pipeline options:
+  -o <base>       Output base name (default: output)
+  -d <secs>       Recording duration (default: until Ctrl+C)
+  -m              Interactively select microphone
+  --txt           Plain text transcript (default)
+  --srt           SRT subtitle format
+  --vtt           WebVTT subtitle format
+  --json          JSON with word timestamps
+  --censor        Redact sensitive words in transcript
+  --locale <L>    Locale for speech recognition (e.g. fr-FR)
+  -h, --help      Show this help
+
+Examples:
+  rec -d 30 -o meeting          Record 30s, custom name, mix, transcribe
+  rec -d 10 -m --srt            10s, interactive mic, SRT subtitles
+  rec -d 15 --vtt --locale fr-FR
+  rec capture -d 5 -m           Just capture
+  rec mix sys.wav mic.wav out.mp3
+  rec transcribe -o meeting --json
+EOF
+}
+
+# ==============================================================
+#  rec_full  —  capture → mix → transcribe
+# ==============================================================
+rec_full() {
+    local base="output" duration="" interactive_mic="" format="txt"
+    local yap_opts=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o)       base="$2"; shift 2 ;;
+            -d)       duration="$2"; shift 2 ;;
+            -m)       interactive_mic="1"; shift ;;
+            --txt)    format="txt"; shift ;;
+            --srt)    format="srt"; shift ;;
+            --vtt)    format="vtt"; shift ;;
+            --json)   format="json"; shift ;;
+            --censor) yap_opts+=(--censor); shift ;;
+            --locale) yap_opts+=(--locale "$2"); shift 2 ;;
+            -h|--help) rec_help; return ;;
+            *)
+                echo "rec: unknown option $1" >&2
+                echo "Usage: rec [-o base] [-d secs] [-m] [--txt|--srt|--vtt|--json] [--censor] [--locale L]" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    # ---- Step 1: Capture ----
+    echo "=== Step 1: Capture ===" >&2
+    local cap_args=()
+    [[ -n "$interactive_mic" ]] && cap_args+=(-m)
+    [[ -n "$duration" ]] && cap_args+=(-d "$duration")
+    cap_args+=(-o "$base")
+    rec_capture "${cap_args[@]}" || { echo "Capture failed, aborting." >&2; return 1; }
+
+    # ---- Step 2: Mix ----
+    echo >&2
+    echo "=== Step 2: Mix ===" >&2
+    rec_mix "${base}_system.wav" "${base}_mic.wav" "${base}.mp3" || {
+        echo "Mix failed, continuing to transcribe." >&2
+        echo "  (mix is optional — the WAV files are still available)" >&2
+    }
+
+    # ---- Step 3: Transcribe ----
+    echo >&2
+    echo "=== Step 3: Transcribe ===" >&2
+    local tr_args=(-o "$base" "--$format")
+    [[ ${#yap_opts[@]} -gt 0 ]] && tr_args+=("${yap_opts[@]}")
+    rec_transcribe "${tr_args[@]}" || { echo "Transcription failed." >&2; return 1; }
+
+    echo >&2
+    echo "All done." >&2
+    echo "  MP3:       ${base}.mp3" >&2
+    echo "  Transcript: ${base}_transcript.${format}" >&2
+}
+
+# ==============================================================
+#  Zsh completions
+# ==============================================================
+if [[ -n "${ZSH_VERSION:-}" ]]; then
+    _rec() {
+        local -a subcmds=(
+            'capture:Record system audio and microphone'
+            'mix:Mix system and mic tracks into mono MP3'
+            'transcribe:Transcribe recordings with speaker labels'
+        )
+
+        if (( CURRENT == 2 )); then
+            _describe 'command' subcmds
+            return
+        fi
+
+        case "$words[2]" in
+            capture)
+                _arguments -s \
+                    {-o,-output}'[output base name]:filename:' \
+                    {-d,-duration}'[recording duration]:seconds:' \
+                    '-m[interactive mic selection]'
+                ;;
+            mix)
+                _arguments -s \
+                    '1:system WAV file:_files -g "*.wav"' \
+                    '2:mic WAV file:_files -g "*.wav"' \
+                    '3:output MP3 file:_files -g "*.mp3"'
+                ;;
+            transcribe)
+                _arguments -s \
+                    {-o,-output}'[output base name]:filename:' \
+                    '--txt[plain text format]' \
+                    '--srt[SRT subtitle format]' \
+                    '--vtt[WebVTT subtitle format]' \
+                    '--json[JSON format]' \
+                    '--censor[enable word censoring]' \
+                    '--locale[locale]:locale:'
+                ;;
+            *)
+                _arguments -s \
+                    {-o,-output}'[output base name]:filename:' \
+                    {-d,-duration}'[recording duration]:seconds:' \
+                    '-m[interactive mic selection]' \
+                    '--txt[plain text format]' \
+                    '--srt[SRT subtitle format]' \
+                    '--vtt[WebVTT subtitle format]' \
+                    '--json[JSON format]' \
+                    '--censor[enable word censoring]' \
+                    '--locale[locale]:locale:'
+                ;;
+        esac
+    }
+
+    if command -v compdef &>/dev/null; then
+        compdef _rec rec
+    fi
+fi
+
+# ==============================================================
+#  Execute (only when run directly, not sourced)
+# ==============================================================
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    set -euo pipefail
+    rec "$@"
+fi

@@ -1,18 +1,23 @@
 # record — macOS System Audio + Microphone Recorder
 
-Captures **system audio** (speaker output) and **microphone** simultaneously
-and saves them as two separate 16‑bit **WAV** files:
+All-in-one toolchain to **record**, **mix**, and **transcribe** system audio
+and microphone on macOS.  One command gives you a mono MP3 *and* a
+speaker-labeled transcript.
 
-- `{base}_system.wav` — system audio (stereo, at the aggregate device rate)
-- `{base}_mic.wav`    — microphone (mono, at the mic's native rate)
-
-The two tracks are **not mixed in real time**.  Each is recorded
-independently at its own sample rate, which avoids the crackling and
-clock‑drift artifacts that plague real-time mixing.  Use the included
-`mix.sh` script to align and merge them into a mono MP3 afterwards.
+- `rec` — unified entry point (capture → mix → transcribe)
+- `./capture` — low-level recorder (produces two separate WAV files)
+- `rec mix` / `rec transcribe` — post-processing subcommands
 
 Uses only **CoreAudio** — no third-party drivers, no kernel extensions, no
 BlackHole, no Soundflower.
+
+## Quick start
+
+```sh
+rec -d 10             # record 10 seconds → MP3 + transcript
+play output.mp3       # listen back
+cat output_transcript.txt
+```
 
 ## Requirements
 
@@ -36,6 +41,34 @@ cc -o capture capture.m -framework CoreAudio -framework Foundation
 
 ## Usage
 
+### `rec` — full pipeline
+
+```sh
+rec                                          # capture (Ctrl+C) → mix → transcribe
+rec -d 30                                    # capture for 30 seconds
+rec -d 30 -o meeting                         # custom base name
+rec -d 10 -m                                 # interactively select microphone
+rec -d 10 --srt --censor                     # SRT subtitles with censoring
+rec -d 15 --vtt --locale fr-FR               # WebVTT in French
+```
+
+Runs all three stages in sequence:
+1. **Capture** — record system + mic to separate WAV files
+2. **Mix** — align clock drift, mix to mono MP3 (`{base}.mp3`)
+3. **Transcribe** — speech-to-text with speaker labels (`{base}_transcript.*`)
+
+### Subcommands
+
+You can run any stage individually:
+
+```sh
+rec capture -d 10 -m                         # just capture
+rec mix output_system.wav output_mic.wav out.mp3   # just mix
+rec transcribe -o output --srt --censor      # just transcribe
+```
+
+### `./capture` — low-level recorder
+
 ```sh
 ./capture                               # record to output_system.wav + output_mic.wav
 ./capture -o recording                  # custom base name
@@ -44,8 +77,6 @@ cc -o capture capture.m -framework CoreAudio -framework Foundation
 ./capture -m                            # interactively select microphone
 ./capture -m -o test -d 10              # interactive mic + custom options
 ```
-
-### Options
 
 | Option | Description |
 |--------|-------------|
@@ -72,53 +103,42 @@ Without `-m`, the default system input device is used automatically.
 If no microphone is available (e.g. Mac Mini with no input device), the
 mic file will contain silence and a warning is printed.
 
-## Post‑processing
+## Mixing — `rec mix` / `mix.sh`
 
-After recording, use the included `mix.sh` script to produce a mono MP3:
+Produces a mono MP3 from the two WAV files, correcting clock drift automatically:
 
 ```sh
-./mix.sh output_system.wav output_mic.wav output.mp3
+rec mix output_system.wav output_mic.wav output.mp3
+# or: ./mix.sh output_system.wav output_mic.wav output.mp3
 ```
 
-`mix.sh` automatically:
+`mix.sh` (and `rec mix`) automatically:
 
 1. **Detects clock drift** by comparing the sample counts of both tracks
 2. **Corrects drift** using SoX's `tempo -s` (pitch-preserving, optimised for speech)
 3. **Mixes equally** — system and microphone at the same level
 4. **Encodes to MP3** at 128 kbps, 48 kHz, mono
 
-For a quick example:
+## Transcription — `rec transcribe` / `transcribe.sh`
+
+Creates a speaker-labeled transcript from the two WAV files:
 
 ```sh
-./capture -d 10          # record 10 seconds
-./mix.sh output_system.wav output_mic.wav output.mp3
-play output.mp3          # listen back
+rec transcribe                                   # output_transcript.txt
+rec transcribe -o recording                      # custom base name
+rec transcribe -o recording --srt                # SRT subtitles
+rec transcribe -o recording --vtt                # WebVTT subtitles
+rec transcribe -o recording --json               # full merged JSON
+rec transcribe --censor                          # redact sensitive words
+rec transcribe --locale fr-FR                    # specify locale
 ```
 
-### Transcription
+How it works:
 
-After recording and mixing, create a speaker-labeled transcript of both
-tracks using the included `transcribe.sh` script:
-
-```sh
-./transcribe.sh                          # output_transcript.txt
-./transcribe.sh -o recording             # custom base name
-./transcribe.sh -o recording --srt       # SRT subtitles
-./transcribe.sh -o recording --vtt       # WebVTT subtitles with speaker labels
-./transcribe.sh -o recording --json      # full merged JSON with word timestamps
-./transcribe.sh --censor                 # redact sensitive words
-./transcribe.sh --locale fr-FR           # specify locale
-```
-
-`transcribe.sh` works by:
-
-1. **Transcribing each source independently** with `yap transcribe --json --word-timestamps`
-2. **Correcting clock drift** using the same sample‑count ratio as `mix.sh`
-3. **Merging chronologically** — all segments from both speakers are
+1. **Transcribes each source independently** with `yap transcribe --json --word-timestamps`
+2. **Corrects clock drift** using the same sample‑count ratio as the mixer
+3. **Merges chronologically** — all segments from both speakers are
    interleaved by timestamp and labeled `[System]` or `[Mic]`
-
-This produces a true conversation transcript showing who said what and when,
-without needing a live transcription session.
 
 ### Output formats
 
@@ -133,7 +153,7 @@ without needing a live transcription session.
 
 - **yap** — on-device speech transcription (`brew install yap`)
 - **jq** — JSON processor (`brew install jq`)
-- **sox** or **ffmpeg** — for sample-count metadata (already needed by `mix.sh`)
+- **sox** or **ffmpeg** — for sample-count metadata (already needed by the mixer)
 
 ## Manual SoX alternative
 
@@ -180,6 +200,32 @@ For microphone recording, macOS will also prompt for **Microphone** access.
 | Raw system    | Aggregate device  | 2        | PCM WAV  |
 | Raw mic       | Mic's native rate | 1        | PCM WAV  |
 | Mix output    | 48 000 Hz         | 1        | MP3 128k |
+
+## Zsh completions
+
+Source `rec` in your `.zshrc` to enable tab completions for all subcommands
+and flags:
+
+```sh
+# .zshrc
+export REC_HOME=/path/to/record  # adjust to your setup
+source $REC_HOME/rec
+```
+
+After `compinit`, pressing `Tab` after `rec ` offers subcommands (`capture`,
+`mix`, `transcribe`) and pipeline flags.  Typing `rec capture -` and pressing
+`Tab` shows capture-specific options, etc.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `rec` | Unified entry point (functions + zsh completions) |
+| `capture.m` | CoreAudio recorder (Objective-C source) |
+| `capture` | Compiled binary |
+| `mix.sh` | Thin wrapper around `rec mix` |
+| `transcribe.sh` | Thin wrapper around `rec transcribe` |
+| `Makefile` | Builds `capture` from source |
 
 ## License
 

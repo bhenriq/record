@@ -54,6 +54,7 @@ rec -d 10 -m                                 # interactively select microphone
 rec -d 15 -l fr-FR                           # specify locale
 rec -o ~/Desktop                             # custom output directory
 rec -k                                       # preserve scratch WAVs after run
+rec -g 6                                     # boost mic by 6dB
 ```
 
 ### Subcommands
@@ -100,6 +101,7 @@ cleaned up on success.  Final deliverables go to `~/Documents/Recordings/`
 |--------|---------|---------|
 | `-o, --output-dir <path>` | `REC_DIR` | `~/Documents/Recordings/` |
 | `-k, --keep-temp` | — | scratch cleaned on success |
+| `-g <dB>` | — | 0 dB (no boost) |
 
 ## How it works
 

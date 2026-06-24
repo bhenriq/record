@@ -35,6 +35,7 @@ Usage:
 Options:
   -d <secs>       Recording duration (default: until Ctrl+C)
   -m              Interactively select microphone
+  -g <dB>         Microphone gain in dB (e.g. -g 6, default: 0)
   -l, --locale <L>       Locale (e.g. fr-FR)
   -o, --output-dir <path> Output directory (default: ~/Documents/Recordings/)
   -k, --keep-temp         Preserve scratch WAVs after run
@@ -57,7 +58,7 @@ _rec() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local subcmds="capture mix transcribe summarize"
-    local global_opts="-d -m -l --locale -o --output-dir -k --keep-temp -h --help"
+    local global_opts="-d -m -g -l --locale -o --output-dir -k --keep-temp -h --help"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$subcmds $global_opts" -- "$cur") )
@@ -69,7 +70,7 @@ _rec() {
             COMPREPLY=( $(compgen -W "-d -m" -- "$cur") )
             ;;
         mix)
-            COMPREPLY=( $(compgen -f -- "$cur") )
+            COMPREPLY=( $(compgen -W "-g" -- "$cur") )
             ;;
         transcribe)
             COMPREPLY=( $(compgen -W "-l --locale" -- "$cur") )
@@ -106,6 +107,7 @@ _rec() {
                 '-m[interactive mic selection]' \\
         mix)
             _arguments -s \\
+                {-g,-mic-gain}'[microphone gain in dB]:dB:' \\
                 '1:system WAV file:_files -g "*.wav"' \\
                 '2:mic WAV file:_files -g "*.wav"' \\
                 '3:output file:_files'
@@ -194,21 +196,24 @@ func runFullPipeline(_ args: [String]) {
     var locale: String?
     var outputDir: String?
     var keepTemp = false
+    var micGainDB: Float = 0
     var i = 0
     while i < args.count {
         let arg = args[i]
         switch arg {
-        case "-d":           duration = Int(args[safe: i + 1] ?? "0") ?? 0; i += 2
-        case "-m":           interactiveMic = true; i += 1
-        case "-l", "--locale":     locale = args[safe: i + 1]; i += 2
+        case "-d":                duration = Int(args[safe: i + 1] ?? "0") ?? 0; i += 2
+        case "-m":                interactiveMic = true; i += 1
+        case "-g":                micGainDB = Float(args[safe: i + 1] ?? "0") ?? 0; i += 2
+        case "-l", "--locale":    locale = args[safe: i + 1]; i += 2
         case "-o", "--output-dir": outputDir = args[safe: i + 1]; i += 2
-        case "-k", "--keep-temp":  keepTemp = true; i += 1
-        case "-h", "--help": printUsage(); return
+        case "-k", "--keep-temp": keepTemp = true; i += 1
+        case "-h", "--help":      printUsage(); return
         default:
             print("rec: unknown option \(arg)", to: &stderr); printUsage()
             exit(1)
         }
     }
+    let micGain = pow(10, micGainDB / 20)  // convert dB to linear
 
     let finalDir = resolveOutputDir(flag: outputDir)
     let tempDir: String
@@ -248,7 +253,7 @@ func runFullPipeline(_ args: [String]) {
         print("\n=== Step 2: Mix ===", to: &stderr)
         let sysWavFile = try WavFile.read(path: sysWav)
         let micWavFile = try WavFile.read(path: micWav)
-        let result = try mix(system: sysWavFile, mic: micWavFile)
+        let result = try mix(system: sysWavFile, mic: micWavFile, micGain: micGain)
         try result.writeWav(path: mixWav)
         mixedWav = mixWav
         print("Done: \(mixWav)", to: &stderr)
@@ -404,9 +409,17 @@ Examples:
 }
 
 func runMix(_ args: [String]) {
-    if args.contains("-h") || args.contains("--help") {
-        print("""
-Usage: rec mix <system.wav> <mic.wav> <output.wav|.m4a>
+    var micGainDB: Float = 0
+
+    // Extract flags before positional args
+    var positional: [String] = []
+    var i = 0
+    while i < args.count {
+        let arg = args[i]
+        switch arg {
+        case "-h", "--help":
+            print("""
+Usage: rec mix [options] <system.wav> <mic.wav> <output.wav|.m4a>
 
 Reads two WAV files, resamples to match sample rates, detects and
 corrects clock drift, and produces a stereo mix:
@@ -417,23 +430,35 @@ Output format is auto-detected from extension:
   .wav → stereo WAV (16-bit PCM)
   .m4a → AAC in M4A container
 
+Flags:
+  -g <dB>    Microphone gain in dB (default: 0)
+
 Examples:
   rec mix sys.wav mic.wav mix.wav
-  rec mix sys.wav mic.wav mix.m4a
+  rec mix -g 6 sys.wav mic.wav mix.m4a
 """)
-        return
+            return
+        case "-g":
+            micGainDB = Float(args[safe: i + 1] ?? "0") ?? 0; i += 2
+        default:
+            positional.append(args[i])
+            i += 1
+        }
     }
-    guard args.count >= 3 else {
-        print("Usage: rec mix <system.wav> <mic.wav> <output.wav|.m4a>", to: &stderr)
+
+    let micGain = pow(10, micGainDB / 20)  // convert dB to linear
+
+    guard positional.count >= 3 else {
+        print("Usage: rec mix [options] <system.wav> <mic.wav> <output.wav|.m4a>", to: &stderr)
         print("Run 'rec mix --help' for details.", to: &stderr)
         exit(1)
     }
-    let sysPath = args[0]
-    let micPath = args[1]
-    let outPath = args[2]
+    let sysPath = positional[0]
+    let micPath = positional[1]
+    let outPath = positional[2]
 
     do {
-        try mixToFile(sysPath: sysPath, micPath: micPath, outputPath: outPath)
+        try mixToFile(sysPath: sysPath, micPath: micPath, outputPath: outPath, micGain: micGain)
     } catch {
         print("Error: \(error)", to: &stderr)
         exit(1)

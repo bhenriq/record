@@ -109,15 +109,13 @@ final class CaptureEngine {
                 let samples = data.assumingMemoryBound(to: Float.self)
                 ring_write(&engine.micRing, samples, frames)
             } else {
-                // Mix down to mono
+                // Use only channel 0 (primary mic element on MacBooks).
+                // Averaging all channels attenuates the signal unnecessarily
+                // when beamforming elements differ in sensitivity.
                 let ptr = data.assumingMemoryBound(to: Float.self)
                 for f in 0..<frames {
-                    var sum: Float = 0
-                    for c in 0..<engine.micChannels {
-                        sum += ptr[Int(f * engine.micChannels + c)]
-                    }
-                    var mono = sum / Float(engine.micChannels)
-                    ring_write(&engine.micRing, &mono, 1)
+                    var sample = ptr[Int(f * engine.micChannels)]  // channel 0 only
+                    ring_write(&engine.micRing, &sample, 1)
                 }
             }
         }

@@ -125,8 +125,10 @@ struct MixResult {
 }
 
 /// Mix system and mic WAVs to stereo (mic left, system right).
-/// Handles drift correction and sample rate conversion.
-func mix(system: WavFile, mic: WavFile) throws -> MixResult {
+/// Handles drift correction, sample rate conversion, and mic gain boost.
+/// - Parameter micGain: Gain multiplier applied to mic samples (default 1.0).
+///   Use 2.0 for +6dB, 0.5 for -6dB, etc.
+func mix(system: WavFile, mic: WavFile, micGain: Float = 1.0) throws -> MixResult {
     let driftThreshold = 0.0001
 
     print("System: \(system.frames) frames, \(Int(system.sampleRate)) Hz, \(String(format: "%.2f", system.duration))s", to: &stderr)
@@ -220,6 +222,14 @@ func mix(system: WavFile, mic: WavFile) throws -> MixResult {
         print("  No significant drift detected", to: &stderr)
     }
 
+    // ---- Apply mic gain ----
+    if abs(micGain - 1.0) > 0.001 {
+        let dB = 20 * log10(micGain)
+        print("  Mic gain: \(String(format: "%.1f", dB)) dB", to: &stderr)
+        var gain = micGain
+        vDSP_vsmul(micMono, 1, &gain, &micMono, 1, vDSP_Length(micMono.count))
+    }
+
     // ---- Mix to stereo: mic left, system right ----
     let outFrames = max(sysMono.count, micMono.count)
     var stereo = [Float](repeating: 0, count: outFrames * 2)
@@ -295,10 +305,10 @@ extension MixResult {
 /// - `.wav` → stereo WAV
 /// - `.m4a` → AAC in M4A container
 /// - Other → WAV (with a warning)
-func mixToFile(sysPath: String, micPath: String, outputPath: String) throws {
+func mixToFile(sysPath: String, micPath: String, outputPath: String, micGain: Float = 1.0) throws {
     let sysWav = try WavFile.read(path: sysPath)
     let micWav = try WavFile.read(path: micPath)
-    let result = try mix(system: sysWav, mic: micWav)
+    let result = try mix(system: sysWav, mic: micWav, micGain: micGain)
 
     let ext = (outputPath as NSString).pathExtension.lowercased()
 

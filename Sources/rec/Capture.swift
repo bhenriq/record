@@ -6,6 +6,7 @@
 import Foundation
 import CoreAudio
 import AudioToolbox
+import Accelerate
 import CBridge
 
 // MARK: - AudioBufferList helpers
@@ -456,7 +457,8 @@ extension CaptureEngine {
 @available(macOS 14.2, *)
 extension CaptureEngine {
     /// Main capture loop — polls ring buffers and writes to WAV files.
-    func captureLoop(duration: Int) throws {
+    /// - Parameter status: Optional shared status object for live display. Updated every ~500ms.
+    func captureLoop(duration: Int, status: CaptureStatus? = nil) throws {
         let maxFrames = kMaxTickFrames
         let sysBuf = UnsafeMutablePointer<Float>.allocate(capacity: Int(maxFrames * 2))
         let micBuf = UnsafeMutablePointer<Float>.allocate(capacity: Int(maxFrames))
@@ -471,6 +473,9 @@ extension CaptureEngine {
 
         let startTime = Date()
         let maxDuration: TimeInterval = duration > 0 ? TimeInterval(duration) : .infinity
+        var lastStatusUpdate: Date = .distantPast
+        var lastSysRms: Float = 0
+        var lastMicRms: Float = 0
 
         while running && Date().timeIntervalSince(startTime) < maxDuration {
             // ---- Write system audio (stereo interleaved) ----
@@ -479,6 +484,10 @@ extension CaptureEngine {
 
             if sysFrames > 0 {
                 let read = ring_read(&sysRing, sysBuf, sysFrames * 2)
+                // Compute RMS for volume display
+                var sumSq: Float = 0
+                vDSP_measqv(sysBuf, 1, &sumSq, vDSP_Length(read))
+                lastSysRms = sqrt(sumSq)
                 // Float32 → SInt16
                 for i in 0..<Int(read) {
                     var s = sysBuf[i]
@@ -496,6 +505,10 @@ extension CaptureEngine {
 
             if micFrames > 0, let _ = micFile {
                 let read = ring_read(&micRing, micBuf, micFrames)
+                // Compute RMS for volume display
+                var sumSq: Float = 0
+                vDSP_measqv(micBuf, 1, &sumSq, vDSP_Length(read))
+                lastMicRms = sqrt(sumSq)
                 for i in 0..<Int(read) {
                     var s = micBuf[i]
                     s = max(-1.0, min(1.0, s))
@@ -516,7 +529,31 @@ extension CaptureEngine {
                 ring_read(&micRing, micBuf, drop)
             }
 
+            // ---- Periodic status update (every ~500ms) ----
+            let now = Date()
+            if now.timeIntervalSince(lastStatusUpdate) >= 0.5 {
+                let elapsed = now.timeIntervalSince(startTime)
+                let sysFr = UInt64(sysDataSize / 4)       // 2 ch × 2 bytes = 4 bytes/frame
+                let micFr = UInt64(micDataSize / 2)        // 1 ch × 2 bytes = 2 bytes/frame
+                status?.update(sysFrames: sysFr, micFrames: micFr, sysRms: lastSysRms, micRms: lastMicRms)
+
+                if isatty(STDERR_FILENO) != 0 {
+                    let sysBar = rmsBar(lastSysRms)
+                    let micBar = rmsBar(lastMicRms)
+                    let driftPct = status?.driftPercent ?? 0
+                    print("\r  sys: \(sysBar)  mic: \(micBar)  drift \(String(format: "%5.2f", driftPct))%  \(String(format: "%.0f", elapsed))s    ", terminator: "", to: &stderr)
+                    Darwin.fflush(__stderrp)
+                }
+                lastStatusUpdate = now
+            }
+
             usleep(kTickIntervalUS)
+        }
+
+        // Clear status line when done
+        if isatty(STDERR_FILENO) != 0 {
+            print("\r\(String(repeating: " ", count: 70))\r", terminator: "", to: &stderr)
+            Darwin.fflush(__stderrp)
         }
     }
 }
@@ -531,7 +568,8 @@ extension CaptureEngine {
     ///   - micWavPath:  Path for the microphone WAV file.
     ///   - duration:    Recording duration in seconds (0 = until Ctrl+C).
     ///   - interactiveMic: If true, show a menu to choose the mic device.
-    static func capture(sysWavPath: String, micWavPath: String, duration: Int = 0, interactiveMic: Bool = false) throws {
+    ///   - status:    Optional shared status object for live display.
+    static func capture(sysWavPath: String, micWavPath: String, duration: Int = 0, interactiveMic: Bool = false, status: CaptureStatus? = nil) throws {
         let engine = CaptureEngine.shared
 
         // Init ring buffers
@@ -578,11 +616,16 @@ extension CaptureEngine {
         signal(SIGINT) { _ in CaptureEngine.shared.running = false }
         signal(SIGTERM) { _ in CaptureEngine.shared.running = false }
 
-        print("\nrecording  ⇢  \(sysWavPath)  and  \(micWavPath)   [Ctrl+C to stop]", to: &stderr)
-        Darwin.fflush(__stderrp)
+        // Print initial recording message (status line will overwrite this on ttys)
+        if isatty(STDERR_FILENO) != 0 {
+            print("\r  Ctrl+C to stop  |  sys: ..........  mic: ..........  drift  0.00%  \(String(repeating: " ", count: 10))\r", terminator: "", to: &stderr)
+            Darwin.fflush(__stderrp)
+        } else {
+            print("recording  ⇢  \(sysWavPath)  and  \(micWavPath)   [Ctrl+C to stop]", to: &stderr)
+        }
 
-        // Main loop
-        try engine.captureLoop(duration: duration)
+        // Main loop (runs on current thread, blocks until done)
+        try engine.captureLoop(duration: duration, status: status)
 
         // Clean up WAV files
         engine.sysFile?.closeFile()
@@ -598,8 +641,18 @@ extension CaptureEngine {
             fh.closeFile()
         }
 
-        print("\ndone — system: \(engine.sysDataSize) bytes, mic: \(engine.micDataSize) bytes", to: &stderr)
+        print("done — system: \(engine.sysDataSize) bytes, mic: \(engine.micDataSize) bytes", to: &stderr)
         print("  system: \(sysWavPath)", to: &stderr)
         print("  mic:    \(micWavPath)", to: &stderr)
     }
+}
+
+// MARK: - Display helpers
+
+/// Build a 10-character bar from RMS amplitude (0..1).
+private func rmsBar(_ rms: Float) -> String {
+    let clamped = min(max(rms, 0), 1)
+    let filled = Int(clamped * 20)
+    let empty = 20 - filled
+    return String(repeating: "\u{2588}", count: filled) + String(repeating: "\u{2591}", count: empty)
 }

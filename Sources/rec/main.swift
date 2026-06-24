@@ -247,7 +247,15 @@ func runFullPipeline(_ args: [String]) {
     do {
         // ======== Step 1: Capture ========
         print("=== Step 1: Capture ===", to: &stderr)
-        try CaptureEngine.capture(sysWavPath: sysWav, micWavPath: micWav, duration: duration, interactiveMic: interactiveMic)
+        let capStatus = CaptureStatus()
+        try CaptureEngine.capture(sysWavPath: sysWav, micWavPath: micWav, duration: duration, interactiveMic: interactiveMic, status: capStatus)
+
+        // Auto-preserve temp dir if drift exceeds threshold
+        let driftPct = capStatus.driftPercent
+        if driftPct > kDriftThreshold {
+            print("⚠  Drift was \(String(format: "%.2f", driftPct))% — raw WAVs preserved in \(tempDir) for manual correction.", to: &stderr)
+            keepTemp = true  // override
+        }
 
         // ======== Step 2: Mix ========
         print("\n=== Step 2: Mix ===", to: &stderr)
@@ -400,11 +408,18 @@ Examples:
         withIntermediateDirectories: true
     )
 
+    let capStatus = CaptureStatus()
     do {
-        try CaptureEngine.capture(sysWavPath: sysPath, micWavPath: micPath, duration: duration, interactiveMic: interactiveMic)
+        try CaptureEngine.capture(sysWavPath: sysPath, micWavPath: micPath, duration: duration, interactiveMic: interactiveMic, status: capStatus)
     } catch {
         print("Error: \(error)", to: &stderr)
         exit(1)
+    }
+
+    // Warn about drift
+    let driftPct = capStatus.driftPercent
+    if driftPct > kDriftThreshold {
+        print("⚠  Drift was \(String(format: "%.2f", driftPct))% — consider remixing with rec mix", to: &stderr)
     }
 }
 

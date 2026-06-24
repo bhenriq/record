@@ -177,9 +177,9 @@ private func runYap(input: String, output: String, locale: String?) throws {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = ["yap"] + args
 
-    // Inherit stdout so yap's progress shows in terminal and we avoid
-    // pipe-buffer deadlock (yap can produce >64KB of JSON output).
-    process.standardOutput = FileHandle.standardOutput
+    // Discard stdout (yap writes JSON there, but we use --output-file).
+    // Keep stderr visible so the user sees progress bars.
+    process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.standardError
 
     do {

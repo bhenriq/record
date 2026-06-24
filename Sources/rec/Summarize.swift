@@ -5,21 +5,12 @@
 
 import Foundation
 
-struct SummarizeConfig {
-    var baseName = "output"
-    var outputDir = "."
-    var inputDir = "."
-    /// Explicit transcript path override (if set, used instead of computed path)
-    var transcriptOverride: String?
-
-    var transcriptPath: String { transcriptOverride ?? "\(inputDir)/\(baseName)_transcript.txt" }
-}
-
 /// Run the summarization pipeline.
-/// - Returns: The generated title string.
-func summarize(config: SummarizeConfig) throws -> String {
-    let transcriptPath = config.transcriptPath
-
+/// - Parameters:
+///   - transcriptPath: Path to the txt transcript file.
+///   - outputPath: Path for the resulting markdown file.
+/// - Returns: The AI-generated title string.
+func summarize(transcriptPath: String, outputPath: String) throws -> String {
     guard FileManager.default.fileExists(atPath: transcriptPath) else {
         throw RecError.general("transcript not found: \(transcriptPath)")
     }
@@ -33,10 +24,6 @@ func summarize(config: SummarizeConfig) throws -> String {
 
     guard which("pi") != nil else {
         throw RecError.toolNotFound("pi")
-    }
-
-    guard which("jq") != nil else {
-        throw RecError.toolNotFound("jq")
     }
 
     print("Reading transcript: \(transcriptPath)", to: &stderr)
@@ -71,27 +58,12 @@ func summarize(config: SummarizeConfig) throws -> String {
         throw RecError.summarizationFailed("empty summary from pi")
     }
 
-    // Sanitize title for filename
-    let filenameTitle = result.title
-        .lowercased()
-        .replacingOccurrences(of: "[^a-z0-9]+", with: "_", options: .regularExpression)
-        .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
-    let safeTitle = filenameTitle.isEmpty ? "transcript" : filenameTitle
+    print("Title: \(result.title)", to: &stderr)
 
-    let dateFormatter = DateFormatter()
-    dateFormatter.dateFormat = "yyyy-MM-dd"
-    let dateStr = dateFormatter.string(from: Date())
-
+    // ---- Build markdown ----
     let dateFormatterLong = DateFormatter()
     dateFormatterLong.dateFormat = "MMMM dd, yyyy"
 
-    let mdFileName = "\(dateStr)_\(safeTitle).md"
-    let mdFilePath = "\(config.outputDir)/\(mdFileName)"
-
-    print("Title: \(result.title)", to: &stderr)
-    print("Output: \(mdFilePath)", to: &stderr)
-
-    // ---- Build markdown ----
     var md = "# \(result.title)\n\n"
     md += "**Date:** \(dateFormatterLong.string(from: Date()))\n\n"
     md += "---\n\n"
@@ -116,10 +88,14 @@ func summarize(config: SummarizeConfig) throws -> String {
     md += boldTranscript + "\n"
 
     // Ensure output directory exists
-    try FileManager.default.createDirectory(atPath: config.outputDir, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        atPath: (outputPath as NSString).deletingLastPathComponent,
+        withIntermediateDirectories: true
+    )
 
-    try md.write(toFile: mdFilePath, atomically: true, encoding: .utf8)
-    print("Done: \(mdFilePath)", to: &stderr)
+    try md.write(toFile: outputPath, atomically: true, encoding: .utf8)
+    print("Output: \(outputPath)", to: &stderr)
+    print("Done: \(outputPath)", to: &stderr)
 
     return result.title
 }

@@ -171,15 +171,16 @@ func transcribe(config: TranscribeConfig) throws {
 private func runYap(input: String, output: String, locale: String?) throws {
     var args = ["transcribe", "--json", "--word-timestamps"]
     if let locale = locale { args += ["--locale", locale] }
-    args += [input, "-o", output]
+    args += [input, "--output-file", output]
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = ["yap"] + args
 
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = pipe
+    // Inherit stdout so yap's progress shows in terminal and we avoid
+    // pipe-buffer deadlock (yap can produce >64KB of JSON output).
+    process.standardOutput = FileHandle.standardOutput
+    process.standardError = FileHandle.standardError
 
     do {
         try process.run()
@@ -189,9 +190,7 @@ private func runYap(input: String, output: String, locale: String?) throws {
     process.waitUntilExit()
 
     guard process.terminationStatus == 0 else {
-        let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
-        let msg = String(data: outputData, encoding: .utf8) ?? "unknown error"
-        throw RecError.transcriptionFailed(msg)
+        throw RecError.transcriptionFailed("yap exited with code \(process.terminationStatus)")
     }
 }
 

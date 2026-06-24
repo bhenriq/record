@@ -35,8 +35,6 @@ Usage:
 Options:
   -d <secs>       Recording duration (default: until Ctrl+C)
   -m              Interactively select microphone
-  --txt|--srt|--vtt|--json  Transcript format (default: txt)
-  --censor        Redact sensitive words
   --locale <L>    Locale (e.g. fr-FR)
   --output-dir <path>  Output directory (default: ~/Documents/Recordings/)
   --keep-temp     Preserve scratch WAVs after run
@@ -59,7 +57,7 @@ _rec() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local subcmds="capture mix transcribe summarize"
-    local global_opts="-d -m --txt --srt --vtt --json --censor --locale --output-dir --keep-temp -h --help"
+    local global_opts="-d -m --locale --output-dir --keep-temp -h --help"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$subcmds $global_opts" -- "$cur") )
@@ -74,7 +72,7 @@ _rec() {
             COMPREPLY=( $(compgen -f -- "$cur") )
             ;;
         transcribe)
-            COMPREPLY=( $(compgen -W "--txt --srt --vtt --json --censor --locale" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--locale" -- "$cur") )
             ;;
         summarize)
             COMPREPLY=( $(compgen -f -- "$cur") )
@@ -114,11 +112,6 @@ _rec() {
             ;;
         transcribe)
             _arguments -s \\
-                '--txt[plain text format]' \\
-                '--srt[SRT subtitle format]' \\
-                '--vtt[WebVTT subtitle format]' \\
-                '--json[JSON format]' \\
-                '--censor[enable word censoring]' \\
                 '--locale[locale]:locale:' \\
                 '1:system WAV file:_files -g "*.wav"' \\
                 '2:mic WAV file:_files -g "*.wav"' \\
@@ -198,8 +191,6 @@ func run() {
 func runFullPipeline(_ args: [String]) {
     var duration = 0
     var interactiveMic = false
-    var format: TranscriptFormat = .txt
-    var censor = false
     var locale: String?
     var outputDir: String?
     var keepTemp = false
@@ -209,11 +200,6 @@ func runFullPipeline(_ args: [String]) {
         switch arg {
         case "-d":           duration = Int(args[safe: i + 1] ?? "0") ?? 0; i += 2
         case "-m":           interactiveMic = true; i += 1
-        case "--txt":        format = .txt; i += 1
-        case "--srt":        format = .srt; i += 1
-        case "--vtt":        format = .vtt; i += 1
-        case "--json":       format = .json; i += 1
-        case "--censor":     censor = true; i += 1
         case "--locale":     locale = args[safe: i + 1]; i += 2
         case "--output-dir": outputDir = args[safe: i + 1]; i += 2
         case "--keep-temp":  keepTemp = true; i += 1
@@ -270,8 +256,7 @@ func runFullPipeline(_ args: [String]) {
         // ======== Step 3: Transcribe ========
         print("\n=== Step 3: Transcribe ===", to: &stderr)
         var trConfig = TranscribeConfig()
-        trConfig.format = format
-        trConfig.censor = censor
+        trConfig.format = .txt
         trConfig.locale = locale
         trConfig.systemWavOverride = sysWav
         trConfig.micWavOverride = micWav
@@ -448,7 +433,7 @@ Examples:
 
 func runTranscribe(_ args: [String]) {
     var format: TranscriptFormat = .txt
-    var censor = false
+    
     var locale: String?
 
     // Extract flags before positional args
@@ -456,11 +441,6 @@ func runTranscribe(_ args: [String]) {
     var i = 0
     while i < args.count {
         switch args[i] {
-        case "--txt":    format = .txt; i += 1
-        case "--srt":    format = .srt; i += 1
-        case "--vtt":    format = .vtt; i += 1
-        case "--json":   format = .json; i += 1
-        case "--censor": censor = true; i += 1
         case "--locale": locale = args[safe: i + 1]; i += 2
         case "-h", "--help":
             print("""
@@ -473,12 +453,10 @@ Output format is inferred from the output file extension:
   .txt → plain text   .srt → SubRip   .vtt → WebVTT   .json → JSON
 
 Flags:
-  --censor        Redact sensitive words in transcript
   --locale <L>    Locale for speech recognition (e.g. fr-FR)
 
 Examples:
   rec transcribe sys.wav mic.wav transcript.txt
-  rec transcribe sys.wav mic.wav captions.srt --censor
 """)
             return
         default:
@@ -504,7 +482,7 @@ Examples:
 
     var config = TranscribeConfig()
     config.format = format
-    config.censor = censor
+    
     config.locale = locale
     config.systemWavOverride = sysWav
     config.micWavOverride = micWav

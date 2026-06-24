@@ -60,7 +60,6 @@ struct MergedMetadata: Codable {
 struct TranscribeConfig {
     var baseName = "output"
     var format: TranscriptFormat = .txt
-    var censor = false
     var locale: String?
     var outputDir = "."
 
@@ -107,11 +106,11 @@ func transcribe(config: TranscribeConfig) throws {
     // ---- Phase 1: transcribe ----
     if sysExists {
         print("  transcribing system audio...", to: &stderr)
-        try runYap(input: sysPath, output: sysJsonPath, censor: config.censor, locale: config.locale)
+        try runYap(input: sysPath, output: sysJsonPath, locale: config.locale)
     }
     if micExists {
         print("  transcribing microphone...", to: &stderr)
-        try runYap(input: micPath, output: micJsonPath, censor: config.censor, locale: config.locale)
+        try runYap(input: micPath, output: micJsonPath, locale: config.locale)
     }
 
     // ---- Phase 2: compute drift ratio ----
@@ -169,9 +168,8 @@ func transcribe(config: TranscribeConfig) throws {
 
 // MARK: - Yap subprocess
 
-private func runYap(input: String, output: String, censor: Bool, locale: String?) throws {
+private func runYap(input: String, output: String, locale: String?) throws {
     var args = ["transcribe", "--json", "--word-timestamps"]
-    if censor { args.append("--censor") }
     if let locale = locale { args += ["--locale", locale] }
     args += [input, "-o", output]
 

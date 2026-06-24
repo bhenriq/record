@@ -52,8 +52,7 @@ rec                                          # capture (Ctrl+C) → mix → tran
 rec -d 30                                    # capture for 30 seconds
 rec -d 10 -o meeting                         # session name for fallback filename
 rec -d 10 -m                                 # interactively select microphone
-rec -d 10 --srt --censor                     # SRT subtitles with censoring
-rec -d 15 --vtt --locale fr-FR               # WebVTT in French
+rec -d 15 --locale fr-FR                     # specify locale
 rec --output-dir ~/Desktop                   # custom output directory
 rec --keep-temp                              # preserve scratch WAVs after run
 ```
@@ -64,7 +63,7 @@ rec --keep-temp                              # preserve scratch WAVs after run
 rec capture -d 10 sys.wav mic.wav            # capture to explicit WAV paths
 rec capture -d 5 -m meeting_sys.wav meeting_mic.wav  # with mic selection
 rec mix sys.wav mic.wav mix.m4a             # mix to AAC stereo (or .wav)
-rec transcribe sys.wav mic.wav transcript.txt --json   # transcribe with speaker labels
+rec transcribe sys.wav mic.wav transcript.txt  # transcribe with speaker labels
 rec summarize transcript.txt ~/Desktop/notes.md  # create summary with explicit output path
 ```
 
@@ -141,10 +140,7 @@ For microphone recording, macOS will also prompt for **Microphone** access.
 
 | Flag | Format | Description |
 |------|--------|-------------|
-| (default) | `txt` | Plain text, `Me`/`Them` labels, no timestamps |
-| `--srt` | SRT | SubRip subtitles with `[Me]`/`[Them]` prefix |
-| `--vtt` | WebVTT | WebVTT format for browsers |
-| `--json` | JSON | Full merged data with word timestamps |
+Format is inferred from output file extension: `.txt`, `.srt`, `.vtt`, `.json`.
 
 ## Project structure
 

@@ -273,9 +273,18 @@ func runFullPipeline(_ args: [String]) {
         var generatedTitle = ""
         do {
             generatedTitle = try summarize(transcriptPath: transcriptTxt, outputPath: summaryMd)
+        } catch let error as RecError {
+            switch error {
+            case .toolNotFound("pi"):
+                print("Summarization skipped: pi not found", to: &stderr)
+                print("  Install: npm install -g @earendil-works/pi-coding-agent", to: &stderr)
+            case .toolNotFound:
+                print("Summarization skipped: \(error)", to: &stderr)
+            default:
+                print("Summarization skipped: \(error)", to: &stderr)
+            }
         } catch {
             print("Summarization skipped: \(error)", to: &stderr)
-            print("  Install pi: npm install -g @earendil-works/pi-coding-agent", to: &stderr)
         }
 
         // ======== Step 5: Finalize — name and move files ========

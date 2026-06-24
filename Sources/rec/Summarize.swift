@@ -181,16 +181,19 @@ private func extractJson(from text: String) -> String {
 // MARK: - Helper
 
 private func which(_ name: String) -> String? {
+    // Use /usr/bin/env to search PATH (handles Homebrew, npm globals, etc.)
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-    process.arguments = [name]
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = [name, "--version"]
     let pipe = Pipe()
     process.standardOutput = pipe
-    try? process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    return String(data: data.trimmingTrailingWhitespace(), encoding: .utf8)
+    process.standardError = pipe
+    do {
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus == 0 { return name }
+    } catch {}
+    return nil
 }
 
 private extension Data {

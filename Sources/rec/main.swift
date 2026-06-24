@@ -30,7 +30,7 @@ Usage:
   rec capture [options] <sys.wav> <mic.wav>
   rec mix <sys.wav> <mic.wav> <out>
   rec transcribe [options] <sys.wav> <mic.wav> <out>
-  rec summarize <input.txt> [output.md]
+  rec summarize <input.txt> <output.md>
 
 Options:
   -d <secs>       Recording duration (default: until Ctrl+C)
@@ -519,71 +519,34 @@ Examples:
 }
 
 func runSummarize(_ args: [String]) {
-    // Only positional args: <input.txt> [output.md]
     if args.contains("-h") || args.contains("--help") {
         print("""
-Usage: rec summarize <input.txt> [output.md]
+Usage: rec summarize <input.txt> <output.md>
 
 Creates a markdown file with an AI-generated title and summary (via pi)
 followed by the full transcript with bold speaker labels.
 
-If output.md is omitted, the file is named after the AI title and placed
-in ~/Documents/Recordings/ (or $REC_DIR).
+Both paths are required.
 
 Examples:
-  rec summarize transcript.txt
   rec summarize transcript.txt ~/Desktop/notes.md
 """)
         return
     }
 
-    guard !args.isEmpty else {
-        print("Usage: rec summarize <input.txt> [output.md]", to: &stderr)
+    guard args.count >= 2 else {
+        print("Usage: rec summarize <input.txt> <output.md>", to: &stderr)
         exit(1)
     }
 
     let transcriptPath = args[0]
-    let outputPath: String
+    let outputPath = args[1]
 
-    if args.count >= 2 {
-        outputPath = args[1]
-    } else {
-        // No output path given — will be AI-named into default dir
-        // We write to a temp location first, then rename after getting the title
-        let tempDir = (try? createTempDir()) ?? NSTemporaryDirectory()
-        outputPath = "\(tempDir)/_summarize_temp.md"
-    }
-
-    let title: String
     do {
-        title = try summarize(transcriptPath: transcriptPath, outputPath: outputPath)
+        _ = try summarize(transcriptPath: transcriptPath, outputPath: outputPath)
     } catch {
         print("Error: \(error)", to: &stderr)
         exit(1)
-    }
-
-    // If no output path was given, rename the temp file with AI title
-    if args.count < 2 {
-        let dateStr: String = {
-            let fmt = DateFormatter()
-            fmt.dateFormat = "yyyy-MM-dd"
-            return fmt.string(from: Date())
-        }()
-        let safeTitle = title
-            .lowercased()
-            .replacingOccurrences(of: "[^a-z0-9]+", with: "_", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
-        let finalStem = safeTitle.isEmpty ? dateStr : "\(dateStr)_\(safeTitle)"
-        let finalDir = resolveOutputDir(flag: nil)
-        try? FileManager.default.createDirectory(atPath: finalDir, withIntermediateDirectories: true)
-        let finalPath = "\(finalDir)/\(finalStem).md"
-        try? FileManager.default.moveItem(atPath: outputPath, toPath: finalPath)
-        // Clean up temp dir
-        let tempDir = (outputPath as NSString).deletingLastPathComponent
-        if tempDir != NSTemporaryDirectory().trimmingCharacters(in: .whitespaces) {
-            try? FileManager.default.removeItem(atPath: tempDir)
-        }
-        print("Done: \(finalPath)", to: &stderr)
     }
 }
 

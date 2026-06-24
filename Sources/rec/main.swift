@@ -35,10 +35,10 @@ Usage:
 Options:
   -d <secs>       Recording duration (default: until Ctrl+C)
   -m              Interactively select microphone
-  --locale <L>    Locale (e.g. fr-FR)
-  --output-dir <path>  Output directory (default: ~/Documents/Recordings/)
-  --keep-temp     Preserve scratch WAVs after run
-  -h, --help      Show this help
+  -l, --locale <L>       Locale (e.g. fr-FR)
+  -o, --output-dir <path> Output directory (default: ~/Documents/Recordings/)
+  -k, --keep-temp         Preserve scratch WAVs after run
+  -h, --help              Show this help
 
 Run 'rec <subcommand> --help' for detailed help.
 """)
@@ -57,7 +57,7 @@ _rec() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local subcmds="capture mix transcribe summarize"
-    local global_opts="-d -m --locale --output-dir --keep-temp -h --help"
+    local global_opts="-d -m -l --locale -o --output-dir -k --keep-temp -h --help"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$subcmds $global_opts" -- "$cur") )
@@ -72,7 +72,7 @@ _rec() {
             COMPREPLY=( $(compgen -f -- "$cur") )
             ;;
         transcribe)
-            COMPREPLY=( $(compgen -W "--locale" -- "$cur") )
+            COMPREPLY=( $(compgen -W "-l --locale" -- "$cur") )
             ;;
         summarize)
             COMPREPLY=( $(compgen -f -- "$cur") )
@@ -112,7 +112,7 @@ _rec() {
             ;;
         transcribe)
             _arguments -s \\
-                '--locale[locale]:locale:' \\
+                {-l,--locale}'[locale]:locale:' \\
                 '1:system WAV file:_files -g "*.wav"' \\
                 '2:mic WAV file:_files -g "*.wav"' \\
                 '3:output file:_files'
@@ -200,9 +200,9 @@ func runFullPipeline(_ args: [String]) {
         switch arg {
         case "-d":           duration = Int(args[safe: i + 1] ?? "0") ?? 0; i += 2
         case "-m":           interactiveMic = true; i += 1
-        case "--locale":     locale = args[safe: i + 1]; i += 2
-        case "--output-dir": outputDir = args[safe: i + 1]; i += 2
-        case "--keep-temp":  keepTemp = true; i += 1
+        case "-l", "--locale":     locale = args[safe: i + 1]; i += 2
+        case "-o", "--output-dir": outputDir = args[safe: i + 1]; i += 2
+        case "-k", "--keep-temp":  keepTemp = true; i += 1
         case "-h", "--help": printUsage(); return
         default:
             print("rec: unknown option \(arg)", to: &stderr); printUsage()
@@ -450,7 +450,7 @@ func runTranscribe(_ args: [String]) {
     var i = 0
     while i < args.count {
         switch args[i] {
-        case "--locale": locale = args[safe: i + 1]; i += 2
+        case "-l", "--locale": locale = args[safe: i + 1]; i += 2
         case "-h", "--help":
             print("""
 Usage: rec transcribe [options] <sys.wav> <mic.wav> <out>
@@ -462,7 +462,7 @@ Output format is inferred from the output file extension:
   .txt → plain text   .srt → SubRip   .vtt → WebVTT   .json → JSON
 
 Flags:
-  --locale <L>    Locale for speech recognition (e.g. fr-FR)
+  -l, --locale <L>    Locale for speech recognition (e.g. fr-FR)
 
 Examples:
   rec transcribe sys.wav mic.wav transcript.txt

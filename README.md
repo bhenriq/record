@@ -100,8 +100,8 @@ cleaned up on success.  Final deliverables go to `~/Documents/Recordings/`
 
 | Option | Env var | Default |
 |--------|---------|---------|
-| `--output-dir <path>` | `REC_DIR` | `~/Documents/Recordings/` |
-| `--keep-temp` | — | scratch cleaned on success |
+| `-o, --output-dir <path>` | `REC_DIR` | `~/Documents/Recordings/` |
+| `-k, --keep-temp` | — | scratch cleaned on success |
 
 ## How it works
 

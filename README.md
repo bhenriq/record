@@ -61,11 +61,12 @@ rec --keep-temp                              # preserve scratch WAVs after run
 ### Subcommands
 
 ```sh
-rec capture -d 10                            # just capture raw WAVs
-rec capture -d 5 -m                          # capture with interactive mic selection
+rec capture -d 10 sys.wav mic.wav            # capture to explicit WAV paths
+rec capture -d 5 -m meeting_sys.wav meeting_mic.wav  # with mic selection
 rec mix sys.wav mic.wav mix.m4a             # mix to AAC stereo (or .wav)
-rec transcribe --json                        # transcribe existing WAVs
-rec summarize                                # create summary from latest transcript
+rec transcribe sys.wav mic.wav transcript.txt --json   # transcribe with speaker labels
+rec summarize transcript.txt                 # create AI-named summary markdown
+rec summarize transcript.txt ~/Desktop/notes.md        # explicit output path
 ```
 
 ### Completions

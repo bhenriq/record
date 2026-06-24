@@ -50,11 +50,10 @@ swift build -c release
 ```sh
 rec                                          # capture (Ctrl+C) → mix → transcribe → summarize
 rec -d 30                                    # capture for 30 seconds
-rec -d 10 -o meeting                         # session name for fallback filename
 rec -d 10 -m                                 # interactively select microphone
-rec -d 15 --locale fr-FR                     # specify locale
-rec --output-dir ~/Desktop                   # custom output directory
-rec --keep-temp                              # preserve scratch WAVs after run
+rec -d 15 -l fr-FR                           # specify locale
+rec -o ~/Desktop                             # custom output directory
+rec -k                                       # preserve scratch WAVs after run
 ```
 
 ### Subcommands
@@ -93,7 +92,6 @@ cleaned up on success.  Final deliverables go to `~/Documents/Recordings/`
 ### Naming
 
 - **With AI summary**: `2026-06-23_meeting_notes.m4a` + `.md` (title from pi)
-- **Session name fallback** (`-o meeting`): `2026-06-23_meeting.m4a`
 - **Timestamp fallback**: `2026-06-23_143022.m4a`
 
 ### Configuration

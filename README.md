@@ -57,6 +57,30 @@ rec -k                                       # preserve scratch WAVs after run
 rec -g 6                                     # boost mic by 6dB
 ```
 
+### Step-by-step mode
+
+Run the pipeline one step at a time, inspecting or manipulating intermediate
+files between steps.  Each invocation runs one step and exits — re-run to
+get to the next step.
+
+```sh
+rec -s -d 30                 # Step 1: Capture only, then pause
+rec resume                   # Step 2: Mix
+rec resume                   # Step 3: Transcribe
+rec resume                   # Step 4: Summarize
+rec resume                   # Step 5: Finalize + cleanup
+```
+
+Multiple concurrent sessions are supported with named sessions:
+
+```sh
+rec -s -d 60 -S meeting-notes   # start a named session
+rec resume -S meeting-notes     # resume that specific session
+```
+
+State is stored in `~/.rec/state.json` (or `~/.rec/sessions/<name>.json`)
+and removed automatically after the finalize step.
+
 ### Subcommands
 
 ```sh
@@ -65,6 +89,7 @@ rec capture -d 5 -m meeting_sys.wav meeting_mic.wav  # with mic selection
 rec mix sys.wav mic.wav mix.m4a             # mix to AAC stereo (or .wav)
 rec transcribe sys.wav mic.wav transcript.txt  # transcribe with speaker labels
 rec summarize transcript.txt ~/Desktop/notes.md  # create summary with explicit output path
+rec resume [-S <session>]                    # continue stepwise pipeline
 ```
 
 ### Completions
@@ -102,6 +127,8 @@ cleaned up on success.  Final deliverables go to `~/Documents/Recordings/`
 | `-o, --output-dir <path>` | `REC_DIR` | `~/Documents/Recordings/` |
 | `-k, --keep-temp` | — | scratch cleaned on success |
 | `-g <dB>` | — | 0 dB (no boost) |
+| `-s, --stepwise` | — | off |
+| `-S, --session <name>` | — | unnamed session |
 
 ## How it works
 
@@ -155,6 +182,7 @@ Sources/
     Mixer.swift         WAV mixing + drift correction
     Transcribe.swift    yap-based transcription with speaker labels
     Summarize.swift     pi-based AI summarization
+    Stepwise.swift      Stepwise session state persistence
     Encode.swift        AAC encoding via afconvert
     Errors.swift        Error types
     Types.swift         Shared types + output directory helpers

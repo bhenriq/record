@@ -552,7 +552,7 @@ extension CaptureEngine {
 
         // Clear status line when done
         if isatty(STDERR_FILENO) != 0 {
-            print("\r\(String(repeating: " ", count: 70))\r", terminator: "", to: &stderr)
+            print("\r\(String(repeating: " ", count: 80))\r", terminator: "", to: &stderr)
             Darwin.fflush(__stderrp)
         }
     }
@@ -609,6 +609,9 @@ extension CaptureEngine {
         // Open output files
         try engine.openWavFiles(sysPath: sysWavPath, micPath: micWavPath)
 
+        // Set sample rates on status (needed for drift to normalize frame counts)
+        status?.setRates(sys: engine.sampleRate, mic: engine.micRate > 0 ? engine.micRate : engine.sampleRate)
+
         // Start audio
         try engine.startAudio()
 
@@ -641,7 +644,7 @@ extension CaptureEngine {
             fh.closeFile()
         }
 
-        print("done — system: \(engine.sysDataSize) bytes, mic: \(engine.micDataSize) bytes", to: &stderr)
+        print("\ndone — system: \(engine.sysDataSize) bytes, mic: \(engine.micDataSize) bytes", to: &stderr)
         print("  system: \(sysWavPath)", to: &stderr)
         print("  mic:    \(micWavPath)", to: &stderr)
     }

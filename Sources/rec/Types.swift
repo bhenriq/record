@@ -70,6 +70,8 @@ class CaptureStatus {
     private var _micFrames: UInt64 = 0
     private var _sysRms: Float = 0
     private var _micRms: Float = 0
+    private var _sysRate: Float64 = 0
+    private var _micRate: Float64 = 0
     private let _startTime = Date()
     private var _done = false
 
@@ -80,12 +82,16 @@ class CaptureStatus {
     var elapsedSec: Double { -_startTime.timeIntervalSinceNow }
     var done: Bool { lockedRead { _done } }
 
-    /// Drift percentage based on frame counts.
-    /// Returns 0 if fewer than 100 frames have been captured (too early to be meaningful).
+    /// Drift percentage based on frame counts, normalized by sample rate.
+    /// Returns 0 if fewer than ~0.5s of audio have been captured.
     var driftPercent: Double {
         let s = Double(sysFrames), m = Double(micFrames)
-        guard s > 100, m > 100 else { return 0 }
-        return abs(s - m) / max(s, m) * 100
+        let sr = _sysRate > 0 ? _sysRate : 48000
+        let mr = _micRate > 0 ? _micRate : 48000
+        let sysSec = s / sr
+        let micSec = m / mr
+        guard sysSec > 1.0, micSec > 1.0 else { return 0 }
+        return abs(sysSec - micSec) / max(sysSec, micSec) * 100
     }
 
     func update(sysFrames: UInt64, micFrames: UInt64, sysRms: Float, micRms: Float) {
@@ -94,6 +100,13 @@ class CaptureStatus {
         _micFrames = micFrames
         _sysRms = sysRms
         _micRms = micRms
+        lock.unlock()
+    }
+
+    func setRates(sys: Float64, mic: Float64) {
+        lock.lock()
+        _sysRate = sys
+        _micRate = mic
         lock.unlock()
     }
 

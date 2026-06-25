@@ -29,11 +29,11 @@ build() {
 }
 
 install_bin() {
-    build
     local src="$PROJECT_DIR/.build/release/$BIN_NAME"
-    if [ ! -f "$src" ]; then
-        echo "Error: binary not found at $src" >&2
-        exit 1
+    if [ -f "$src" ]; then
+        echo "==> Binary already built, skipping build."
+    else
+        build
     fi
     echo "==> Installing to $INSTALL_DIR/$BIN_NAME..."
     if cp "$src" "$INSTALL_DIR/$BIN_NAME" 2>/dev/null; then

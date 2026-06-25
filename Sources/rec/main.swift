@@ -359,11 +359,22 @@ func runFullPipeline(_ args: [String]) {
         exit(1)
     }
 
-    // In stepwise mode, refuse to overwrite an in-progress session
-    if stepwise && loadStepwiseState(session: session) != nil {
+    // In stepwise mode, check for existing session
+    if stepwise, let _ = loadStepwiseState(session: session) {
         let hint = session.map { " -S \($0)" } ?? ""
-        print("rec: a stepwise session already exists. Use 'rec resume\(hint)' to continue, or delete the state file to start fresh.", to: &stderr)
-        exit(1)
+        if isatty(STDIN_FILENO) != 0 {
+            print("A stepwise session already exists. Restart? [y/N] ", terminator: "", to: &stderr)
+            Darwin.fflush(__stderrp)
+            if let response = readLine(), response.lowercased() == "y" {
+                removeStepwiseState(session: session)
+            } else {
+                print("Use 'rec resume\(hint)' to continue.", to: &stderr)
+                exit(1)
+            }
+        } else {
+            print("A stepwise session already exists. Use 'rec resume\(hint)' to continue, or delete the state file to start fresh.", to: &stderr)
+            exit(1)
+        }
     }
 
     let micGain = pow(10, micGainDB / 20)  // convert dB to linear

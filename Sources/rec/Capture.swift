@@ -652,10 +652,13 @@ extension CaptureEngine {
 
 // MARK: - Display helpers
 
-/// Build a 10-character bar from RMS amplitude (0..1).
+/// Build a 20-character volume bar from RMS amplitude using dBFS scaling.
+/// Maps -60 dBFS (silence) to 0 blocks, 0 dBFS (full scale) to 20 blocks.
 private func rmsBar(_ rms: Float) -> String {
-    let clamped = min(max(rms, 0), 1)
-    let filled = Int(clamped * 20)
+    let db = rms > 0 ? 20 * log10(rms) : -60.0
+    let clamped = max(db, -60)
+    let fraction = (clamped + 60) / 60   // -60..0 dB → 0..1
+    let filled = min(Int(fraction * 20), 20)
     let empty = 20 - filled
     return String(repeating: "\u{2588}", count: filled) + String(repeating: "\u{2591}", count: empty)
 }

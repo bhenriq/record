@@ -113,16 +113,18 @@ func transcribe(config: TranscribeConfig) throws {
         try runYap(input: micPath, output: micJsonPath, locale: config.locale)
     }
 
-    // ---- Phase 2: compute drift ratio ----
+    // ---- Phase 2: compute drift ratio (time-based, same as mix) ----
     var ratio: Double = 1.0
     if sysExists && micExists {
-        let sysFrames = try getWavFrameCount(path: sysPath)
-        let micFrames = try getWavFrameCount(path: micPath)
-        if micFrames > 0 {
-            ratio = Double(sysFrames) / Double(micFrames)
+        let sysWav = try WavFile.read(path: sysPath)
+        let micWav = try WavFile.read(path: micPath)
+        let sysSec = Double(sysWav.frames) / sysWav.sampleRate
+        let micSec = Double(micWav.frames) / micWav.sampleRate
+        if micSec > 0 {
+            ratio = sysSec / micSec
             let drift = abs(ratio - 1.0)
             if drift > 0.0001 {
-                print("  drift correction: ratio=\(String(format: "%.6f", ratio))", to: &stderr)
+                print("  drift correction: ratio=\(String(format: "%.6f", ratio)) (\(String(format: "%.2f", drift * 100))%)", to: &stderr)
             } else {
                 print("  no significant drift detected", to: &stderr)
             }
@@ -192,13 +194,6 @@ private func runYap(input: String, output: String, locale: String?) throws {
     guard process.terminationStatus == 0 else {
         throw RecError.transcriptionFailed("yap exited with code \(process.terminationStatus)")
     }
-}
-
-// MARK: - Frame count from WAV
-
-private func getWavFrameCount(path: String) throws -> Int {
-    let wav = try WavFile.read(path: path)
-    return wav.frames
 }
 
 // MARK: - Merge logic

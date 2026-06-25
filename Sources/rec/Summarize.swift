@@ -105,7 +105,7 @@ func summarize(transcriptPath: String, outputPath: String) throws -> String {
 private func runPi(input: String) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["pi", "-p"]
+    process.arguments = ["pi", "-p", "--no-session"]
 
     let stdinPipe = Pipe()
     let stdoutPipe = Pipe()

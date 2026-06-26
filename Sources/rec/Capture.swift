@@ -120,13 +120,26 @@ final class CaptureEngine {
             let channels = buf.mNumberChannels
             let frames = totalSamples / channels
             engine.micChannels = channels  // keep cache in sync for any downstream readers
-            // Always extract only channel 0 to produce a clean mono stream.
-            // Averaging all beamforming elements would attenuate the signal
-            // because the elements have different sensitivities and pickup patterns.
             let ptr = data.assumingMemoryBound(to: Float.self)
-            for f in 0..<frames {
-                var sample = ptr[Int(f * channels)]  // channel 0 only
-                ring_write(&engine.micRing, &sample, 1)
+
+            if channels == 1 {
+                // Fast path: single-channel processed signal (beamformed + AGC)
+                ring_write(&engine.micRing, ptr, frames)
+            } else {
+                // Multi-channel raw beamforming elements. Sum all channels to
+                // recover constructive beamforming gain, then apply a boost to
+                // restore the volume lost from driver-side AGC/noise suppression.
+                // The output of AudioUnitRender for VoiceProcessing is same as
+                // this sum. The boost compensates for public address volume.
+                for f in 0..<frames {
+                    let base = Int(f * channels)
+                    var sum: Float = 0
+                    for c in 0..<channels {
+                        sum += ptr[base + Int(c)]
+                    }
+                    var sample = sum * 5.0  // boost to match 1-ch processed level
+                    ring_write(&engine.micRing, &sample, 1)
+                }
             }
         }
         return noErr
@@ -519,8 +532,7 @@ extension CaptureEngine {
                 vDSP_measqv(micBuf, 1, &sumSq, vDSP_Length(read))
                 lastMicRms = sqrt(sumSq)
                 for i in 0..<Int(read) {
-                    var s = micBuf[i]
-                    s = max(-1.0, min(1.0, s))
+                    let s = max(-1.0, min(1.0, micBuf[i]))
                     convMic[i] = Int16(s * 32767.0)
                 }
                 let data = Data(bytesNoCopy: convMic, count: Int(read) * MemoryLayout<Int16>.size, deallocator: .none)

@@ -98,6 +98,15 @@ final class CaptureEngine {
 
     /// Microphone IOProc — called from real-time audio thread.
     /// Mixes multi-channel to mono, writes Float32 samples into micRing.
+    ///
+    /// IMPORTANT: The mic device may DYNAMICALLY change its channel count at runtime.
+    /// On MacBook Air  (and other Apple Silicon Macs), the built-in microphone switches
+    /// from 1-channel mono to 3-channel beamforming (left/center/right elements) whenever
+    /// the system audio output becomes active (e.g. ChatGPT voice, music, notifications).
+    /// This provides raw multi-element data for echo cancellation.
+    /// We must use `buf.mNumberChannels` (the actual format of each callback) rather than
+    /// the cached `engine.micChannels` to correctly compute the frame count per callback.
+    /// We then extract only channel 0 for a clean mono recording.
     static let micIOProc: AudioDeviceIOProc = { (_, _, inputData, _, _, _, _) -> OSStatus in
         guard inputData.pointee.mNumberBuffers > 0 else { return noErr }
         let engine = CaptureEngine.shared
@@ -105,19 +114,19 @@ final class CaptureEngine {
         for buf in inputData.buffers {
             guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
             let totalSamples = buf.mDataByteSize / UInt32(MemoryLayout<Float>.size)
-            let frames = totalSamples / engine.micChannels
-            if engine.micChannels == 1 {
-                let samples = data.assumingMemoryBound(to: Float.self)
-                ring_write(&engine.micRing, samples, frames)
-            } else {
-                // Use only channel 0 (primary mic element on MacBooks).
-                // Averaging all channels attenuates the signal unnecessarily
-                // when beamforming elements differ in sensitivity.
-                let ptr = data.assumingMemoryBound(to: Float.self)
-                for f in 0..<frames {
-                    var sample = ptr[Int(f * engine.micChannels)]  // channel 0 only
-                    ring_write(&engine.micRing, &sample, 1)
-                }
+            // Use the ACTUAL channel count from this buffer — the device may have
+            // changed format since setup (e.g. 1ch → 3ch when speakers activate).
+            // The cached engine.micChannels would give us the wrong frame count.
+            let channels = buf.mNumberChannels
+            let frames = totalSamples / channels
+            engine.micChannels = channels  // keep cache in sync for any downstream readers
+            // Always extract only channel 0 to produce a clean mono stream.
+            // Averaging all beamforming elements would attenuate the signal
+            // because the elements have different sensitivities and pickup patterns.
+            let ptr = data.assumingMemoryBound(to: Float.self)
+            for f in 0..<frames {
+                var sample = ptr[Int(f * channels)]  // channel 0 only
+                ring_write(&engine.micRing, &sample, 1)
             }
         }
         return noErr

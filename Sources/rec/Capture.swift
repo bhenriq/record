@@ -69,6 +69,9 @@ final class CaptureEngine {
     var running = true
     var hasMic = false
 
+    // Debug
+    var micIOProcDebugged = false
+
     private init() {}
 
     // MARK: - Device info
@@ -102,6 +105,44 @@ final class CaptureEngine {
         guard inputData.pointee.mNumberBuffers > 0 else { return noErr }
         let engine = CaptureEngine.shared
         guard engine.hasMic else { return noErr }
+
+        // Debug: dump AudioBufferList on first invocation
+        if !engine.micIOProcDebugged {
+            engine.micIOProcDebugged = true
+            print("  mic IOProc: mNumberBuffers=\(inputData.pointee.mNumberBuffers)", to: &stderr)
+            let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
+            for i in 0..<abl.count {
+                let buf = abl[i]
+                print("    buffer[\(i)]: mNumberChannels=\(buf.mNumberChannels) mDataByteSize=\(buf.mDataByteSize)", to: &stderr)
+            }
+            // Also print aggregate stream format (for comparison)
+            if engine.aggID != 0 {
+                var addr = AudioObjectPropertyAddress(
+                    mSelector: kAudioDevicePropertyStreamFormat,
+                    mScope: kAudioObjectPropertyScopeInput,
+                    mElement: kAudioObjectPropertyElementMain
+                )
+                var asbd = AudioStreamBasicDescription()
+                var sz = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+                if AudioObjectGetPropertyData(engine.aggID, &addr, 0, nil, &sz, &asbd) == noErr {
+                    print("    agg stream: \(asbd.mChannelsPerFrame) ch, \(asbd.mSampleRate) Hz, format=\(asbd.mFormatFlags)", to: &stderr)
+                }
+            }
+            // Print mic device stream format
+            if engine.micID != 0 {
+                var addr = AudioObjectPropertyAddress(
+                    mSelector: kAudioDevicePropertyStreamFormat,
+                    mScope: kAudioObjectPropertyScopeInput,
+                    mElement: kAudioObjectPropertyElementMain
+                )
+                var asbd = AudioStreamBasicDescription()
+                var sz = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+                if AudioObjectGetPropertyData(engine.micID, &addr, 0, nil, &sz, &asbd) == noErr {
+                    print("    mic stream: \(asbd.mChannelsPerFrame) ch, \(asbd.mSampleRate) Hz, format=\(asbd.mFormatFlags)", to: &stderr)
+                }
+            }
+        }
+
         for buf in inputData.buffers {
             guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
             let totalSamples = buf.mDataByteSize / UInt32(MemoryLayout<Float>.size)
@@ -604,6 +645,31 @@ extension CaptureEngine {
             try engine.setupMic(device: devices[choice - 1])
         } else {
             try engine.setupMic()
+        }
+
+        // Debug: check if mic is a sub-device of the aggregate
+        do {
+            var subAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioAggregateDevicePropertyActiveSubDeviceList,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var subSize: UInt32 = 0
+            let subErr = AudioObjectGetPropertyDataSize(engine.aggID, &subAddr, 0, nil, &subSize)
+            if subErr == noErr, subSize > 0 {
+                let subCount = Int(subSize) / MemoryLayout<AudioObjectID>.size
+                var subDevices = [AudioObjectID](repeating: 0, count: subCount)
+                AudioObjectGetPropertyData(engine.aggID, &subAddr, 0, nil, &subSize, &subDevices)
+                for sd in subDevices {
+                    if sd == engine.micID {
+                        print("  ⚠ mic is a sub-device of the aggregate — may double-start", to: &stderr)
+                    } else {
+                        print("  agg sub-device: \(sd)", to: &stderr)
+                    }
+                }
+            } else {
+                print("  agg has no sub-devices (or query failed: \(subErr))", to: &stderr)
+            }
         }
 
         // Open output files

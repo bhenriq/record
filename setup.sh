@@ -23,6 +23,9 @@ EOF
 }
 
 build() {
+    echo "==> Generating commit hash..."
+    local commit=$(cd "$PROJECT_DIR" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+    echo "public let recVersion = \"$commit\"" > "$PROJECT_DIR/Sources/rec/Version.swift"
     echo "==> Building rec (release)..."
     (cd "$PROJECT_DIR" && swift build -c release)
     echo "==> Build done."
@@ -30,11 +33,7 @@ build() {
 
 install_bin() {
     local src="$PROJECT_DIR/.build/release/$BIN_NAME"
-    if [ -f "$src" ]; then
-        echo "==> Binary already built, skipping build."
-    else
-        build
-    fi
+    build
     echo "==> Installing to $INSTALL_DIR/$BIN_NAME..."
     if cp "$src" "$INSTALL_DIR/$BIN_NAME" 2>/dev/null; then
         echo "==> Done.  Run: $BIN_NAME --help"

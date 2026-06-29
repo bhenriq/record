@@ -9,3 +9,4 @@ test.json
 *.swp
 .build/
 *.o
+Sources/rec/Version.swift

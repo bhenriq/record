@@ -158,6 +158,12 @@ func run() {
         return
     }
 
+    // Handle -v / --version
+    if args.count > 1, args[1] == "-v" || args[1] == "--version" {
+        print("rec \(recVersion)")
+        return
+    }
+
     // Handle -h / --help
     if args.count == 2, args[1] == "-h" || args[1] == "--help" {
         printUsage()

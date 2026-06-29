@@ -45,6 +45,7 @@ Options:
   -s, --stepwise          Run pipeline step by step
   -S, --session <name>    Session name (for stepwise mode)
   -h, --help              Show this help
+  --pidfile <path>        Write JSON pidfile for menu-bar companion tracking
 
 If no speech is detected, the transcript will be empty and the
 pipeline stops before summarization. State is saved so you can
@@ -362,6 +363,7 @@ func runFullPipeline(_ args: [String]) {
     var micGainDB: Float = 0
     var stepwise = false
     var session: String?
+    var pidfilePath: String?
     var i = 0
     while i < args.count {
         let arg = args[i]
@@ -374,6 +376,7 @@ func runFullPipeline(_ args: [String]) {
         case "-k", "--keep-temp": keepTemp = true; i += 1
         case "-s", "--stepwise":  stepwise = true; i += 1
         case "-S", "--session":   session = args[safe: i + 1]; i += 2
+        case "--pidfile":         pidfilePath = args[safe: i + 1]; i += 2
         case "-h", "--help":      printUsage(); return
         default:
             print("rec: unknown option \(arg)", to: &stderr); printUsage()
@@ -385,6 +388,9 @@ func runFullPipeline(_ args: [String]) {
         print("rec: --session/-S requires --stepwise/-s", to: &stderr)
         exit(1)
     }
+
+    // Resolve pidfile path once args are fully parsed
+    let thePidfile = pidfilePath ?? defaultPidfilePath
 
     // In stepwise mode, check for existing session
     if stepwise, let _ = loadStepwiseState(session: session) {
@@ -454,7 +460,30 @@ func runFullPipeline(_ args: [String]) {
     var success = false
     var mixedWav_ = ""
     var currentKeepTemp = keepTemp
+
+    // Write initial pidfile before capture starts
+    if pidfilePath != nil {
+        let pf = RecPidfile(
+            pid: ProcessInfo.processInfo.processIdentifier,
+            startTime: Date(),
+            command: "full",
+            state: .capturing,
+            tempDir: tempDir,
+            outputDir: outputDir,
+            session: session
+        )
+        try? writePidfile(path: thePidfile, pf)
+    }
+
     defer {
+        if pidfilePath != nil {
+            // On success: remove pidfile. On error: write error state.
+            if success {
+                removePidfile(path: thePidfile)
+            } else {
+                updatePidfileState(path: thePidfile, state: .error, errorMessage: "pipeline failed")
+            }
+        }
         if stepwise {
             // Keep temp dir alive across invocations for stepwise mode
             if !success {
@@ -475,6 +504,7 @@ func runFullPipeline(_ args: [String]) {
         try stepCapture(sysWav: sysWav, micWav: micWav, duration: duration, interactiveMic: interactiveMic, tempDir: tempDir, keepTemp: &currentKeepTemp)
 
         if stepwise {
+            updatePidfileState(path: thePidfile, state: .done)
             var state = loadStepwiseState(session: session)!
             state.step = 0
             state.keepTemp = currentKeepTemp
@@ -485,9 +515,13 @@ func runFullPipeline(_ args: [String]) {
             return  // exit — next step via resume
         }
 
+        updatePidfileState(path: thePidfile, state: .mixing)
+
         // ======== Step 2: Mix ========
         try stepMix(sysWav: sysWav, micWav: micWav, mixWav: mixWav, micGain: micGain)
         mixedWav_ = mixWav
+
+        updatePidfileState(path: thePidfile, state: .transcribing)
 
         // ======== Step 3: Transcribe ========
         try stepTranscribe(sysWav: sysWav, micWav: micWav, transcriptTxt: transcriptTxt, locale: locale)
@@ -496,6 +530,7 @@ func runFullPipeline(_ args: [String]) {
         if isTranscriptEmpty(transcriptTxt) {
             print("Transcript is empty \u{2014} no speech detected.", to: &stderr)
             print("Stopping before summarization phase.", to: &stderr)
+            updatePidfileState(path: thePidfile, state: .done)
             // Save stepwise state so user can resume with 'rec resume'
             let savedState = StepwiseState(
                 step: 2,            // transcribe done
@@ -519,8 +554,12 @@ func runFullPipeline(_ args: [String]) {
             return
         }
 
+        updatePidfileState(path: thePidfile, state: .summarizing)
+
         // ======== Step 4: Summarize ========
         let generatedTitle = stepSummarize(transcriptTxt: transcriptTxt, summaryMd: summaryMd)
+
+        updatePidfileState(path: thePidfile, state: .finalizing)
 
         // ======== Step 5: Finalize ========
         _ = stepFinalize(finalDir: finalDir, mixedWav: mixedWav_, summaryMd: summaryMd, generatedTitle: generatedTitle, keepTemp: currentKeepTemp, tempDir: tempDir)
@@ -528,6 +567,9 @@ func runFullPipeline(_ args: [String]) {
         success = true
     } catch {
         print("Error: \(error)", to: &stderr)
+        if pidfilePath != nil {
+            updatePidfileState(path: thePidfile, state: .error, errorMessage: "\(error)")
+        }
         exit(1)
     }
 }
@@ -538,11 +580,14 @@ func runFullPipeline(_ args: [String]) {
 func runResume(args: [String]) {
     // Parse -S/--session from args
     var session: String?
+    var pidfilePath: String?
     var i = 0
     while i < args.count {
         switch args[i] {
         case "-S", "--session":
             session = args[safe: i + 1]; i += 2
+        case "--pidfile":
+            pidfilePath = args[safe: i + 1]; i += 2
         case "-h", "--help":
             print("""
 Usage: rec resume [options]
@@ -654,6 +699,7 @@ Examples:
 func runCapture(_ args: [String]) {
     var duration = 0
     var interactiveMic = false
+    var pidfilePath: String?
 
     // Extract flags before positional args
     var positional: [String] = []
@@ -662,6 +708,7 @@ func runCapture(_ args: [String]) {
         switch args[i] {
         case "-d": duration = Int(args[safe: i + 1] ?? "0") ?? 0; i += 2
         case "-m": interactiveMic = true; i += 1
+        case "--pidfile": pidfilePath = args[safe: i + 1]; i += 2
         case "-h", "--help":
             print("""
 Usage: rec capture [options] <sys.wav> <mic.wav>
@@ -672,6 +719,7 @@ Both output paths are required positional arguments.
 Flags:
   -d <secs>       Recording duration (default: until Ctrl+C)
   -m              Interactively select microphone input device
+  --pidfile <path> Write JSON pidfile for menu-bar companion tracking
 
 Examples:
   rec capture -d 10 sys.wav mic.wav
@@ -699,12 +747,35 @@ Examples:
         withIntermediateDirectories: true
     )
 
+    let thePidfile = pidfilePath ?? defaultPidfilePath
+
+    // Write pidfile when --pidfile is given
+    if pidfilePath != nil {
+        let pf = RecPidfile(
+            pid: ProcessInfo.processInfo.processIdentifier,
+            startTime: Date(),
+            command: "capture",
+            state: .capturing,
+            tempDir: (sysPath as NSString).deletingLastPathComponent,
+            outputDir: nil,
+            session: nil
+        )
+        try? writePidfile(path: thePidfile, pf)
+    }
+
     let capStatus = CaptureStatus()
     do {
         try CaptureEngine.capture(sysWavPath: sysPath, micWavPath: micPath, duration: duration, interactiveMic: interactiveMic, status: capStatus)
     } catch {
         print("Error: \(error)", to: &stderr)
+        if pidfilePath != nil {
+            updatePidfileState(path: thePidfile, state: .error, errorMessage: "\(error)")
+        }
         exit(1)
+    }
+
+    if pidfilePath != nil {
+        removePidfile(path: thePidfile)
     }
 
     // Warn about drift

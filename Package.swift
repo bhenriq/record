@@ -7,7 +7,8 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "rec", targets: ["rec"])
+        .executable(name: "rec", targets: ["rec"]),
+        .executable(name: "RecMenu", targets: ["RecMenu"]),
     ],
     dependencies: [],
     targets: [
@@ -19,6 +20,10 @@ let package = Package(
         .executableTarget(
             name: "rec",
             dependencies: ["CBridge"]
-        )
+        ),
+        .executableTarget(
+            name: "RecMenu",
+            dependencies: []
+        ),
     ]
 )

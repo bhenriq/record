@@ -41,6 +41,10 @@ All other dependencies are built-in macOS frameworks (CoreAudio, AudioToolbox, A
 ```sh
 swift build -c release
 # binary is at .build/release/rec
+
+# Build the menu bar app:
+swift build -c release --product RecMenu
+./Scripts/build-menu-app.sh
 ```
 
 ## Usage
@@ -55,6 +59,7 @@ rec -d 15 -l fr-FR                           # specify locale
 rec -o ~/Desktop                             # custom output directory
 rec -k                                       # preserve scratch WAVs after run
 rec -g 6                                     # boost mic by 6dB
+rec --pidfile ~/.rec/current.json            # write JSON status file (for menu bar app)
 
 If no speech is detected, the transcript will be empty and the
 pipeline stops before summarization, saving state so you can
@@ -200,6 +205,48 @@ Sources/
     Errors.swift        Error types
     Types.swift         Shared types + output directory helpers
 ```
+
+## Menu Bar App (RecMenu)
+
+A lightweight menu bar companion that lets you start and stop `rec` recordings
+with a single click. The icon shows:
+- **Gray dot** — idle (no recording)
+- **Red dot (pulsing)** — recording in progress
+- **Orange dot** — processing (mixing / transcribing / summarizing)
+- **Brown dot with !** — error
+
+### Build & Install
+
+```sh
+# Build the menu bar app and install to ~/Applications/
+./Scripts/build-menu-app.sh --install
+
+# Or just build the .app bundle in .build/
+./Scripts/build-menu-app.sh
+```
+
+Then launch **RecMenu** from Spotlight or `~/Applications/`. It will
+appear in the menu bar (no Dock icon).
+
+### How it works
+
+The menu bar app:
+1. Locates the `rec` binary on your PATH or at common install locations.
+2. When you click **Start**, it launches `rec` with `--pidfile` to write a
+   JSON status file to `~/.rec/current.json`.
+3. It polls that pidfile every 0.5s to update the icon (capturing → mixing →
+   transcribing → summarizing → done).
+4. When you click **Stop**, it sends SIGINT to `rec`, which gracefully stops
+   capture and continues the pipeline (mix → transcribe → summarize).
+5. On launch, it checks for orphaned pidfiles and re-attaches if `rec` is
+   still running.
+
+### Troubleshooting
+
+If the icon shows an error state:
+- Make sure `rec` is installed and on your PATH.
+- Check `~/.rec/current.json` for error details.
+- Run `rec` from the terminal to see full error output.
 
 ## License
 

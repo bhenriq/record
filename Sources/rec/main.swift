@@ -46,6 +46,10 @@ Options:
   -S, --session <name>    Session name (for stepwise mode)
   -h, --help              Show this help
 
+If no speech is detected, the transcript will be empty and the
+pipeline stops before summarization. State is saved so you can
+resume with 'rec resume' after re-recording or re-transcribing.
+
 Run 'rec <subcommand> --help' for detailed help.
 """)
 }
@@ -251,9 +255,26 @@ func stepTranscribe(sysWav: String, micWav: String, transcriptTxt: String, local
     }
 }
 
+/// Check if the transcript file is empty (no speech detected).
+private func isTranscriptEmpty(_ path: String) -> Bool {
+    guard let data = FileManager.default.contents(atPath: path),
+          let content = String(data: data, encoding: .utf8) else {
+        return true
+    }
+    return content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+}
+
 @available(macOS 14.2, *)
 func stepSummarize(transcriptTxt: String, summaryMd: String) -> String {
     print("\n=== Step 4: Summarize ===", to: &stderr)
+
+    // Check for empty transcript before engaging pi
+    if isTranscriptEmpty(transcriptTxt) {
+        print("Transcript is empty \u{2014} no speech detected. Skipping summarization.", to: &stderr)
+        print("You can resume with 'rec resume' after re-recording or re-transcribing.", to: &stderr)
+        return ""
+    }
+
     var generatedTitle = ""
     do {
         generatedTitle = try summarize(transcriptPath: transcriptTxt, outputPath: summaryMd)
@@ -471,6 +492,33 @@ func runFullPipeline(_ args: [String]) {
         // ======== Step 3: Transcribe ========
         try stepTranscribe(sysWav: sysWav, micWav: micWav, transcriptTxt: transcriptTxt, locale: locale)
 
+        // ======== Check for empty transcript ========
+        if isTranscriptEmpty(transcriptTxt) {
+            print("Transcript is empty \u{2014} no speech detected.", to: &stderr)
+            print("Stopping before summarization phase.", to: &stderr)
+            // Save stepwise state so user can resume with 'rec resume'
+            let savedState = StepwiseState(
+                step: 2,            // transcribe done
+                duration: duration,
+                interactiveMic: interactiveMic,
+                micGainDB: micGainDB,
+                locale: locale,
+                outputDir: outputDir,
+                keepTemp: currentKeepTemp,
+                tempDir: tempDir,
+                sysWav: sysWav,
+                micWav: micWav,
+                mixWav: mixWav,
+                transcriptTxt: transcriptTxt,
+                summaryMd: summaryMd,
+                generatedTitle: ""
+            )
+            try saveStepwiseState(savedState, session: session)
+            let hint = session.map { " -S \($0)" } ?? ""
+            print("→ State saved. Run 'rec resume\(hint)' to continue after fixing the transcript.", to: &stderr)
+            return
+        }
+
         // ======== Step 4: Summarize ========
         let generatedTitle = stepSummarize(transcriptTxt: transcriptTxt, summaryMd: summaryMd)
 
@@ -503,6 +551,10 @@ Continues a stepwise recording pipeline from where it left off.
 
 Options:
   -S, --session <name>    Session name to resume (default: unnamed session)
+
+If the transcript is empty (no speech detected), summarization is
+skipped and the session state stays at the current step so you can
+re-record or re-transcribe, then run 'rec resume' again.
 
 Examples:
   rec resume
@@ -563,6 +615,14 @@ Examples:
             print("→ Run 'rec resume\(sessionFlag)' to continue.", to: &stderr)
 
         case 2:
+            // Check for empty transcript before engaging summarization
+            if isTranscriptEmpty(state.transcriptTxt) {
+                print("Transcript is empty — no speech detected.", to: &stderr)
+                print("Skipping summarization. State remains at current step.", to: &stderr)
+                print("You can re-record or re-transcribe, then run 'rec resume\(sessionFlag)' again.", to: &stderr)
+                return  // don't advance state
+            }
+
             // Run summarize
             state.generatedTitle = stepSummarize(transcriptTxt: state.transcriptTxt, summaryMd: state.summaryMd)
             state.step = 3

@@ -55,6 +55,10 @@ rec -d 15 -l fr-FR                           # specify locale
 rec -o ~/Desktop                             # custom output directory
 rec -k                                       # preserve scratch WAVs after run
 rec -g 6                                     # boost mic by 6dB
+
+If no speech is detected, the transcript will be empty and the
+pipeline stops before summarization, saving state so you can
+resume with `rec resume` after re-recording or re-transcribing.
 ```
 
 ### Step-by-step mode
@@ -80,6 +84,11 @@ rec resume -S meeting-notes     # resume that specific session
 
 State is stored in `~/.rec/state.json` (or `~/.rec/sessions/<name>.json`)
 and removed automatically after the finalize step.
+
+If the transcript is empty (no speech detected), summarization is
+skipped and the session state stays at the current step. Run
+`rec resume` again after re-recording or re-transcribing to
+continue.
 
 ### Subcommands
 
@@ -149,6 +158,10 @@ cleaned up on success.  Final deliverables go to `~/Documents/Recordings/`
    chronologically with speaker labels (Me / Them), applies drift correction.
 8. **Summarize**: Sends transcript to `pi -p` for AI title + summary,
    writes markdown with both summary and full transcript.
+
+   If the transcript is empty (no speech detected), this step is
+   skipped entirely. The pipeline stops, saves its state, and waits
+   for you to run `rec resume` after re-recording or re-transcribing.
 
 ## Permissions
 

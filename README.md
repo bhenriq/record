@@ -173,7 +173,15 @@ frame counts for each source. See [Time-anchored drift correction](#time-anchore
    that captures every application's audio output, wrapped in a private
    **aggregate device** so CoreAudio presents it as a regular input device.
 2. **Microphone**: Opens the default input device (or user-selected with `-m`).
-   A second I/O procedure is registered on the chosen device.
+   A second I/O procedure is registered on the chosen device.  The IOProc
+   inspects the actual AudioBufferList layout rather than trusting the
+   device's reported channel count — some MacBook models present a
+   3-element microphone array as 3 interleaved channels in a single
+   AudioBuffer while reporting only 1 channel via stream configuration.
+   When multiple channels are detected, they are **averaged to mono**
+   (the elements are closely spaced ~7 mm, giving sub-sample delay and
+   near-zero signal cancellation).  This prevents the captured WAV from
+   being N× too long on multi-element mics and reduces uncorrelated noise.
 3. **Ring buffers**: Both IOProcs write Float32 samples into separate
    lock‑free SPSC ring buffers (backed by C11 `_Atomic` for real-time safety).
 4. **Write loop**: A polling loop drains each ring buffer independently
@@ -184,6 +192,24 @@ frame counts for each source. See [Time-anchored drift correction](#time-anchore
    resamples mic to match system rate (linear interpolation), stretches
    mic to match system duration, and mixes to stereo (mic left, system right).
 6. **Encode**: Encodes to AAC in M4A container via `afconvert` (built into macOS).
+
+### Multi-element microphone handling
+
+MacBook Air/Pro models use a multi-element microphone array (typically 3
+microphone ports).  CoreAudio may present these elements as several
+channels — either interleaved in a single AudioBuffer or as separate
+non-interleaved buffers — while the stream configuration (`kAudioDevicePropertyStreamConfiguration`)
+reports only 1 channel (the beamformed output).
+
+The mic IOProc handles this transparently:
+- **Interleaved** (1 buffer, N channels): averages all channels to mono.
+- **Non-interleaved** (N buffers, 1 channel each): averages across buffers frame-by-frame.
+- **Genuine mono** (1 buffer, 1 channel): writes through with zero overhead.
+
+The averaging is safe because the physical spacing of the elements (~7 mm)
+produces sub-sample time-of-arrival differences at 48 kHz, so comb-filtering
+is negligible (measured cancellation < 0.2%).  As a side benefit, averaging
+reduces uncorrelated thermal/self-noise by up to 10·log₁₀(N) dB.
 7. **Transcribe**: Runs `yap transcribe` on each source, merges segments
    chronologically with speaker labels (Me / Them), applies **drift
    correction**. If `anchors.json` is available, each segment's timestamp

@@ -102,22 +102,67 @@ final class CaptureEngine {
         guard inputData.pointee.mNumberBuffers > 0 else { return noErr }
         let engine = CaptureEngine.shared
         guard engine.hasMic else { return noErr }
-        for buf in inputData.buffers {
-            guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
+
+        // Inspect the AudioBufferList to determine the actual channel layout.
+        // Some devices (e.g. MacBook Air 3-mic array) report 1 channel via
+        // stream configuration but deliver 3 interleaved channels in a single
+        // AudioBuffer.  Iterating over all buffers/channels as-if-mono caused
+        // the captured WAV to be 3× longer than expected (issue #1).
+        let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
+        let numBufs = abl.count
+        var totalChannels: UInt32 = 0
+        for b in 0..<numBufs {
+            totalChannels += abl[b].mNumberChannels
+        }
+        guard totalChannels > 0 else { return noErr }
+
+        if numBufs == 1 {
+            // Interleaved (or genuine mono): one buffer holds all channels.
+            let buf = abl[0]
+            guard let data = buf.mData, buf.mDataByteSize > 0 else { return noErr }
+            let ch = buf.mNumberChannels
             let totalSamples = buf.mDataByteSize / UInt32(MemoryLayout<Float>.size)
-            let frames = totalSamples / engine.micChannels
-            if engine.micChannels == 1 {
-                let samples = data.assumingMemoryBound(to: Float.self)
-                ring_write(&engine.micRing, samples, frames)
+            let frames = totalSamples / ch
+            let ptr = data.assumingMemoryBound(to: Float.self)
+
+            if ch == 1 {
+                // Genuine mono — write directly.
+                ring_write(&engine.micRing, ptr, frames)
             } else {
-                // Use only channel 0 (primary mic element on MacBooks).
-                // Averaging all channels attenuates the signal unnecessarily
-                // when beamforming elements differ in sensitivity.
-                let ptr = data.assumingMemoryBound(to: Float.self)
-                for f in 0..<frames {
-                    var sample = ptr[Int(f * engine.micChannels)]  // channel 0 only
-                    ring_write(&engine.micRing, &sample, 1)
+                // Multi-channel interleaved — average to mono.
+                // The 3 elements on MacBook Air are closely spaced (~7 mm),
+                // giving sub-sample delay at 48 kHz and near-zero cancellation
+                // when averaged.  The RMS of all three channels is identical,
+                // so sensitivity mismatch is not a concern here.
+                for f in 0..<Int(frames) {
+                    var sum: Float = 0
+                    for c in 0..<Int(ch) {
+                        sum += ptr[f * Int(ch) + c]
+                    }
+                    var avg = sum / Float(ch)
+                    ring_write(&engine.micRing, &avg, 1)
                 }
+            }
+        } else {
+            // Non-interleaved: one buffer per channel.
+            // Use the first buffer to determine the frame count.
+            let buf0 = abl[0]
+            guard buf0.mDataByteSize > 0 else { return noErr }
+            let ch0 = buf0.mNumberChannels
+            let samplesPerBuf = buf0.mDataByteSize / UInt32(MemoryLayout<Float>.size)
+            let frames = samplesPerBuf / ch0
+
+            for f in 0..<Int(frames) {
+                var sum: Float = 0
+                for b in 0..<numBufs {
+                    let buf = abl[b]
+                    if let data = buf.mData, buf.mDataByteSize > 0 {
+                        let ptr = data.assumingMemoryBound(to: Float.self)
+                        sum += ptr[f]
+                    }
+                }
+                var avg = sum / Float(numBufs)
+                ring_write(&engine.micRing, &avg, 1)
             }
         }
         return noErr

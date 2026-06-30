@@ -562,6 +562,33 @@ func runFullPipeline(_ args: [String]) {
         // ======== Step 4: Summarize ========
         let generatedTitle = stepSummarize(transcriptTxt: transcriptTxt, summaryMd: summaryMd)
 
+        // If summarization failed and transcript wasn't empty, save state for resume
+        if generatedTitle.isEmpty {
+            print("Summarization did not complete. You can retry later.", to: &stderr)
+            updatePidfileState(path: thePidfile, state: .done)
+            let savedState = StepwiseState(
+                step: 2,            // transcribe done
+                duration: duration,
+                interactiveMic: interactiveMic,
+                micGainDB: micGainDB,
+                locale: locale,
+                outputDir: outputDir,
+                keepTemp: currentKeepTemp,
+                tempDir: tempDir,
+                sysWav: sysWav,
+                micWav: micWav,
+                mixWav: mixWav,
+                transcriptTxt: transcriptTxt,
+                summaryMd: summaryMd,
+                anchorsPath: anchorsPath,
+                generatedTitle: ""
+            )
+            try saveStepwiseState(savedState, session: session)
+            let hint = session.map { " -S \($0)" } ?? ""
+            print("→ State saved. Run 'rec resume\(hint)' to retry summarization and finalize.", to: &stderr)
+            return
+        }
+
         updatePidfileState(path: thePidfile, state: .finalizing)
 
         // ======== Step 5: Finalize ========
@@ -670,6 +697,12 @@ Examples:
 
             // Run summarize
             state.generatedTitle = stepSummarize(transcriptTxt: state.transcriptTxt, summaryMd: state.summaryMd)
+            guard !state.generatedTitle.isEmpty else {
+                print("Summarization did not complete. State remains at current step.", to: &stderr)
+                print("Run 'rec resume\(sessionFlag)' again to retry.", to: &stderr)
+                try saveStepwiseState(state, session: session)
+                return  // don't advance state
+            }
             state.step = 3
             try saveStepwiseState(state, session: session)
             print("✓ Step 4/4: Summarize complete.", to: &stderr)

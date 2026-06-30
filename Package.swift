@@ -23,7 +23,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "RecMenu",
-            dependencies: []
+            dependencies: [],
+            resources: [.process("Resources")]
         ),
     ]
 )

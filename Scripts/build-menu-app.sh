@@ -15,9 +15,15 @@ cd "$PROJECT_DIR"
 APP_NAME="Rec"
 SPM_PRODUCT="RecMenu"
 BUNDLE_ID="com.record.rec"
-# Output the .app bundle next to the project root, not inside .build/
-# (which may have permission issues from sudo operations)
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
+
+# Clean up previous bundle (handle root-owned files from sudo builds)
+if [ -d "$APP_BUNDLE" ]; then
+    chflags -R nouchg "$APP_BUNDLE" 2>/dev/null || true
+    rm -rf "$APP_BUNDLE" 2>/dev/null || \
+        python3 -c "import os,shutil; shutil.rmtree('$APP_BUNDLE', onexc=lambda f,p,e: None)" 2>/dev/null || \
+        { echo "Warning: could not remove $APP_BUNDLE — try: sudo rm -rf '$APP_BUNDLE'"; }
+fi
 
 echo "==> Building $SPM_PRODUCT (release)..."
 swift build -c release --product "$SPM_PRODUCT"

@@ -15,6 +15,10 @@ OSStatus TapBridgeCreate(const char *tapName, const char *uuidStr, AudioObjectID
         tapDesc.name = name;
         tapDesc.UUID = uuid;
 
-        return AudioHardwareCreateProcessTap(tapDesc, outTapID);
+        if (@available(macOS 14.2, *)) {
+            return AudioHardwareCreateProcessTap(tapDesc, outTapID);
+        } else {
+            return kAudioHardwareBadPropertySizeError;
+        }
     }
 }

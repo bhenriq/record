@@ -250,16 +250,18 @@ class RecController {
     // MARK: - Helpers
 
     /// Find the `rec` binary by checking common paths and $PATH.
+    /// System-wide paths are preferred over user-local ones.
     private static func findRecBinary() -> String? {
-        // First check user-local paths (development builds)
         let candidates = [
-            "\(NSHomeDirectory())/.local/bin/rec",
-            "\(NSHomeDirectory())/bin/rec",
-            "\(NSHomeDirectory())/Documents/Recordings/.build/release/rec",
-            // Then system paths
+            // System-wide installs (preferred)
             "/usr/local/bin/rec",
             "/opt/homebrew/bin/rec",
+            // User-local installs
+            "\(NSHomeDirectory())/.local/bin/rec",
+            "\(NSHomeDirectory())/bin/rec",
             "\(NSHomeDirectory())/.brew/bin/rec",
+            // Development builds
+            "\(NSHomeDirectory())/Documents/Recordings/.build/release/rec",
         ]
         for path in candidates {
             if FileManager.default.fileExists(atPath: path) {

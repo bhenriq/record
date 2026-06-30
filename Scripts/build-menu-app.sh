@@ -20,14 +20,18 @@ SPM_PRODUCT="RecMenu"
 BUNDLE_ID="com.record.rec"
 
 # Use a temp scratch dir to avoid root-owned artifacts in .build/
-SCRATCH_DIR="${TMPDIR:-/tmp}/rec-menu-build-$$"
-APP_BUNDLE="${TMPDIR:-/tmp}/$APP_NAME.app"
+SCRATCH_DIR="${SCRATCH_DIR:-${TMPDIR:-/tmp}/rec-menu-build-$$}"
+APP_BUNDLE="${APP_BUNDLE:-${TMPDIR:-/tmp}/$APP_NAME.app}"
 
 # Clean up any leftover from a previous run
-rm -rf "$APP_BUNDLE" "$SCRATCH_DIR" 2>/dev/null || true
+rm -rf "$APP_BUNDLE" 2>/dev/null || true
 
-echo "==> Building $SPM_PRODUCT (release)..."
-swift build -c release --product "$SPM_PRODUCT" --scratch-path "$SCRATCH_DIR"
+# Build (or skip if SKIP_BUILD is set and binary exists)
+if [ "${SKIP_BUILD:-}" != "1" ] || [ ! -f "$SCRATCH_DIR/release/$SPM_PRODUCT" ]; then
+    echo "==> Building $SPM_PRODUCT (release)..."
+    rm -rf "$SCRATCH_DIR" 2>/dev/null || true
+    swift build -c release --product "$SPM_PRODUCT" --scratch-path "$SCRATCH_DIR"
+fi
 
 BINARY="$SCRATCH_DIR/release/$SPM_PRODUCT"
 if [ ! -f "$BINARY" ]; then

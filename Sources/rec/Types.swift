@@ -123,5 +123,122 @@ class CaptureStatus {
     }
 }
 
+// MARK: - Time anchors for drift correction
+
+/// A single time anchor point captured during recording.
+/// Records the wall-clock time and cumulative frame counts for both
+/// system and microphone at a moment in time.
+struct TimeAnchor: Codable {
+    let wallSec: TimeInterval     // seconds since capture start
+    let sysFrames: UInt64         // total frames written to sys WAV so far
+    let micFrames: UInt64         // total frames written to mic WAV so far
+}
+
+/// A set of time anchors with sample rates, used to map audio sample
+/// offsets to real wall-clock time via interpolation.
+struct TimeAnchorSet: Codable {
+    let sysRate: Float64
+    let micRate: Float64
+    let anchors: [TimeAnchor]
+
+    /// Map a system-audio time offset (seconds into the system WAV) to
+    /// wall time (seconds since capture start).
+    func systemTimeToWall(_ t: Double) -> TimeInterval {
+        let sampleOffset = UInt64(t * sysRate)
+        return interpolateFrames(sampleOffset, keyPath: \.sysFrames)
+    }
+
+    /// Map a mic-audio time offset (seconds into the mic WAV) to
+    /// wall time (seconds since capture start).
+    func micTimeToWall(_ t: Double) -> TimeInterval {
+        let sampleOffset = UInt64(t * micRate)
+        return interpolateFrames(sampleOffset, keyPath: \.micFrames)
+    }
+
+    /// The wall time at which the very first audio frames were captured.
+    var startWallSec: TimeInterval {
+        anchors.first?.wallSec ?? 0
+    }
+
+    /// Duration of the recording in wall-clock seconds.
+    var duration: TimeInterval {
+        (anchors.last?.wallSec ?? 0) - startWallSec
+    }
+
+    // MARK: - Interpolation
+
+    private func interpolateFrames(_ target: UInt64, keyPath: KeyPath<TimeAnchor, UInt64>) -> TimeInterval {
+        guard anchors.count >= 2 else {
+            // With a single anchor, assume no drift
+            return anchors.first?.wallSec ?? 0
+        }
+
+        // Find the insertion point
+        var lo = 0
+        var hi = anchors.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if anchors[mid][keyPath: keyPath] < target {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+
+        let idx = lo
+
+        if idx == 0 {
+            // Before first anchor → extrapolate backward from first two
+            let a0 = anchors[0]
+            let a1 = anchors[1]
+            let f0 = Double(a0[keyPath: keyPath])
+            let f1 = Double(a1[keyPath: keyPath])
+            let frameDelta = f1 - f0
+            guard frameDelta > 0 else { return a0.wallSec }
+            let fraction = (Double(target) - f0) / frameDelta
+            return a0.wallSec + fraction * (a1.wallSec - a0.wallSec)
+        } else if idx >= anchors.count {
+            // Past last anchor → extrapolate forward from last two
+            let a0 = anchors[anchors.count - 2]
+            let a1 = anchors[anchors.count - 1]
+            let f0 = Double(a0[keyPath: keyPath])
+            let f1 = Double(a1[keyPath: keyPath])
+            let frameDelta = f1 - f0
+            guard frameDelta > 0 else { return a1.wallSec }
+            let fraction = (Double(target) - f0) / frameDelta
+            // Clamp to avoid extreme extrapolation
+            let result = a0.wallSec + fraction * (a1.wallSec - a0.wallSec)
+            return max(result, a0.wallSec)
+        } else {
+            // Between anchors — linear interpolation
+            let a0 = anchors[idx - 1]
+            let a1 = anchors[idx]
+            let f0 = Double(a0[keyPath: keyPath])
+            let f1 = Double(a1[keyPath: keyPath])
+            let frameDelta = f1 - f0
+            guard frameDelta > 0 else { return a0.wallSec }
+            let fraction = (Double(target) - f0) / frameDelta
+            return a0.wallSec + fraction * (a1.wallSec - a0.wallSec)
+        }
+    }
+}
+
+/// Default anchor file name written alongside scratch WAVs.
+let kAnchorFileName = "anchors.json"
+
+// MARK: - Save / load anchors
+
+/// Write time anchors to a JSON file.
+func saveAnchors(_ anchors: TimeAnchorSet, to path: String) throws {
+    let data = try JSONEncoder().encode(anchors)
+    try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+}
+
+/// Load time anchors from a JSON file.
+func loadAnchors(from path: String) -> TimeAnchorSet? {
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+    return try? JSONDecoder().decode(TimeAnchorSet.self, from: data)
+}
+
 /// Threshold above which drift is flagged (0.5%).
 let kDriftThreshold: Double = 0.5

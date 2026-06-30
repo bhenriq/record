@@ -457,8 +457,11 @@ extension CaptureEngine {
 @available(macOS 14.2, *)
 extension CaptureEngine {
     /// Main capture loop — polls ring buffers and writes to WAV files.
-    /// - Parameter status: Optional shared status object for live display. Updated every ~500ms.
-    func captureLoop(duration: Int, status: CaptureStatus? = nil) throws {
+    /// - Parameters:
+    ///   - duration: Recording duration in seconds (0 = unlimited).
+    ///   - status: Optional shared status object for live display. Updated every ~500ms.
+    ///   - anchorsPath: Optional path to write time-anchor JSON after capture.
+    func captureLoop(duration: Int, status: CaptureStatus? = nil, anchorsPath: String? = nil) throws {
         let maxFrames = kMaxTickFrames
         let sysBuf = UnsafeMutablePointer<Float>.allocate(capacity: Int(maxFrames * 2))
         let micBuf = UnsafeMutablePointer<Float>.allocate(capacity: Int(maxFrames))
@@ -476,6 +479,13 @@ extension CaptureEngine {
         var lastStatusUpdate: Date = .distantPast
         var lastSysRms: Float = 0
         var lastMicRms: Float = 0
+
+        // Time anchors for drift tracking
+        var timeAnchors: [TimeAnchor] = []
+        var lastAnchorTime: Date = .distantPast
+        // Record initial anchor at t=0
+        timeAnchors.append(TimeAnchor(wallSec: 0, sysFrames: 0, micFrames: 0))
+        lastAnchorTime = startTime
 
         while running && Date().timeIntervalSince(startTime) < maxDuration {
             // ---- Write system audio (stereo interleaved) ----
@@ -529,8 +539,20 @@ extension CaptureEngine {
                 ring_read(&micRing, micBuf, drop)
             }
 
-            // ---- Periodic status update (every ~500ms) ----
             let now = Date()
+
+            // ---- Time anchor recording (every ~1 second) ----
+            if now.timeIntervalSince(lastAnchorTime) >= 1.0 {
+                let elapsed = now.timeIntervalSince(startTime)
+                timeAnchors.append(TimeAnchor(
+                    wallSec: elapsed,
+                    sysFrames: UInt64(sysDataSize / 4),    // 2 ch × 2 bytes = 4 bytes/frame
+                    micFrames: UInt64(micDataSize / 2)     // 1 ch × 2 bytes = 2 bytes/frame
+                ))
+                lastAnchorTime = now
+            }
+
+            // ---- Periodic status update (every ~500ms) ----
             if now.timeIntervalSince(lastStatusUpdate) >= 0.5 {
                 let elapsed = now.timeIntervalSince(startTime)
                 let sysFr = UInt64(sysDataSize / 4)       // 2 ch × 2 bytes = 4 bytes/frame
@@ -555,6 +577,23 @@ extension CaptureEngine {
             print("\r\(String(repeating: " ", count: 80))\r", terminator: "", to: &stderr)
             Darwin.fflush(__stderrp)
         }
+
+        // Write time anchors if requested
+        if let path = anchorsPath, timeAnchors.count > 1 {
+            // Append a final anchor with the very latest counts
+            let finalElapsed = Date().timeIntervalSince(startTime)
+            timeAnchors.append(TimeAnchor(
+                wallSec: finalElapsed,
+                sysFrames: UInt64(sysDataSize / 4),
+                micFrames: UInt64(micDataSize / 2)
+            ))
+            let anchorSet = TimeAnchorSet(
+                sysRate: sampleRate,
+                micRate: micRate > 0 ? micRate : sampleRate,
+                anchors: timeAnchors
+            )
+            try? saveAnchors(anchorSet, to: path)
+        }
     }
 }
 
@@ -569,7 +608,8 @@ extension CaptureEngine {
     ///   - duration:    Recording duration in seconds (0 = until Ctrl+C).
     ///   - interactiveMic: If true, show a menu to choose the mic device.
     ///   - status:    Optional shared status object for live display.
-    static func capture(sysWavPath: String, micWavPath: String, duration: Int = 0, interactiveMic: Bool = false, status: CaptureStatus? = nil) throws {
+    ///   - anchorsPath: Optional path to write time-anchor JSON after capture.
+    static func capture(sysWavPath: String, micWavPath: String, duration: Int = 0, interactiveMic: Bool = false, status: CaptureStatus? = nil, anchorsPath: String? = nil) throws {
         let engine = CaptureEngine.shared
 
         // Init ring buffers
@@ -628,7 +668,7 @@ extension CaptureEngine {
         }
 
         // Main loop (runs on current thread, blocks until done)
-        try engine.captureLoop(duration: duration, status: status)
+        try engine.captureLoop(duration: duration, status: status, anchorsPath: anchorsPath)
 
         // Clean up WAV files
         engine.sysFile?.closeFile()

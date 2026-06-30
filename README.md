@@ -136,11 +136,14 @@ cleaned up on success.  Final deliverables go to `~/Documents/Recordings/`
 
 | Stage | Temp file | Final file |
 |-------|-----------|------------|
-| Capture | `sys.wav`, `mic.wav` | — |
+| Capture | `sys.wav`, `mic.wav`, `anchors.json` | — |
 | Mix | `mix.wav` | — |
 | Encode | — | `YYYY-MM-DD_title.m4a` |
 | Transcribe | `transcript.txt` | — (embedded in markdown) |
 | Summarize | — | `YYYY-MM-DD_title.md` |
+
+`anchors.json` records wall-clock time every second alongside cumulative
+frame counts for each source. See [Time-anchored drift correction](#time-anchored-drift-correction) below.
 
 ### Naming
 
@@ -167,19 +170,51 @@ cleaned up on success.  Final deliverables go to `~/Documents/Recordings/`
 3. **Ring buffers**: Both IOProcs write Float32 samples into separate
    lock‑free SPSC ring buffers (backed by C11 `_Atomic` for real-time safety).
 4. **Write loop**: A polling loop drains each ring buffer independently
-   and writes raw PCM to its own WAV file.
+   and writes raw PCM to its own WAV file. Every second, it records a
+   **time anchor** — the wall clock time and cumulative frame count for
+   both sources — and saves them to `anchors.json` for drift correction.
 5. **Mix**: Reads both WAVs, detects clock drift by sample-count ratio,
    resamples mic to match system rate (linear interpolation), stretches
    mic to match system duration, and mixes to stereo (mic left, system right).
 6. **Encode**: Encodes to AAC in M4A container via `afconvert` (built into macOS).
 7. **Transcribe**: Runs `yap transcribe` on each source, merges segments
-   chronologically with speaker labels (Me / Them), applies drift correction.
+   chronologically with speaker labels (Me / Them), applies **drift
+   correction**. If `anchors.json` is available, each segment's timestamp
+   is mapped to real wall-clock time via piecewise linear interpolation
+   between the recorded time anchors — this handles non-simultaneous device
+   starts, non-uniform clock drift, and enables accurate long-form
+   transcription. Falls back to WAV-duration ratio if anchors are absent.
 8. **Summarize**: Sends transcript to `pi -p` for AI title + summary,
    writes markdown with both summary and full transcript.
 
    If the transcript is empty (no speech detected), this step is
    skipped entirely. The pipeline stops, saves its state, and waits
    for you to run `rec resume` after re-recording or re-transcribing.
+
+### Time-anchored drift correction
+
+System audio (process tap) and microphone each have their own clock
+domain. Their sample rates may differ by a few hundred parts per million,
+and they may not start at exactly the same wall-clock time.
+
+During capture, every second the write loop records a **time anchor** —
+a tuple of (wall-clock seconds since start, cumulative system frames,
+cumulative mic frames). These anchors are saved to `anchors.json` in
+the scratch directory.
+
+During transcription, the anchors are loaded and each speech segment's
+timestamp is mapped to the real wall-clock timeline via **piecewise
+linear interpolation** between the nearest anchors. This:
+- Corrects for non-simultaneous device start (the first few anchors
+  may show zero mic frames while system frames accumulate).
+- Tracks non-uniform drift (if one device's clock rate shifts during
+  the recording, anchor spacing changes accordingly).
+- Provides a ground-truth timeline for merging system and mic speech
+  segments.
+
+If `anchors.json` is absent (legacy recordings, standalone `rec transcribe`),
+the fallback method computes a single drift ratio from the total WAV
+frame counts, which assumes constant uniform drift.
 
 ## Permissions
 

@@ -67,6 +67,7 @@ struct TranscribeConfig {
     var systemWavOverride: String?
     var micWavOverride: String?
     var transcriptOverride: String?
+    var anchorsPath: String?    // path to time-anchor JSON for drift correction
 
     var systemWav: String { systemWavOverride ?? "\(outputDir)/\(baseName)_sys.wav" }
     var micWav: String { micWavOverride ?? "\(outputDir)/\(baseName)_mic.wav" }
@@ -113,22 +114,43 @@ func transcribe(config: TranscribeConfig) throws {
         try runYap(input: micPath, output: micJsonPath, locale: config.locale)
     }
 
-    // ---- Phase 2: compute drift ratio (time-based, same as mix) ----
-    var ratio: Double = 1.0
-    if sysExists && micExists {
-        let sysWav = try WavFile.read(path: sysPath)
-        let micWav = try WavFile.read(path: micPath)
-        let sysSec = Double(sysWav.frames) / sysWav.sampleRate
-        let micSec = Double(micWav.frames) / micWav.sampleRate
-        if micSec > 0 {
-            ratio = sysSec / micSec
-            let drift = abs(ratio - 1.0)
-            if drift > 0.0001 {
-                print("  drift correction: ratio=\(String(format: "%.6f", ratio)) (\(String(format: "%.2f", drift * 100))%)", to: &stderr)
+    // ---- Phase 2: load time anchors or compute drift ratio ----
+    var anchors: TimeAnchorSet?
+    if let anchorsPath = config.anchorsPath, let loaded = loadAnchors(from: anchorsPath) {
+        anchors = loaded
+        print("  time anchors: \(loaded.anchors.count) points (sys \(Int(loaded.sysRate)) Hz, mic \(Int(loaded.micRate)) Hz)", to: &stderr)
+        if loaded.anchors.count > 2 {
+            let total = loaded.duration
+            let sysSec = Double(loaded.anchors.last!.sysFrames) / loaded.sysRate
+            let drift = abs(total - sysSec) / max(total, sysSec) * 100
+            if drift > 0.05 {
+                print("  drift from anchors: \(String(format: "%.3f", drift))%", to: &stderr)
             } else {
-                print("  no significant drift detected", to: &stderr)
+                print("  no significant drift", to: &stderr)
             }
         }
+    }
+
+    var ratio: Double = 1.0
+    if sysExists && micExists {
+        if anchors == nil {
+            // Fallback: compute ratio from WAV durations (same as mix phase)
+            let sysWavFile = try WavFile.read(path: sysPath)
+            let micWavFile = try WavFile.read(path: micPath)
+            let sysSec = Double(sysWavFile.frames) / sysWavFile.sampleRate
+            let micSec = Double(micWavFile.frames) / micWavFile.sampleRate
+            if micSec > 0 {
+                ratio = sysSec / micSec
+                let drift = abs(ratio - 1.0)
+                if drift > 0.0001 {
+                    print("  drift correction (WAV ratio): ratio=\(String(format: "%.6f", ratio)) (\(String(format: "%.2f", drift * 100))%)", to: &stderr)
+                } else {
+                    print("  no significant drift detected", to: &stderr)
+                }
+            }
+        }
+        // When anchors are available, ratio is not used — timestamps are
+        // mapped via anchor interpolation instead.
     }
 
     // ---- Phase 3: merge ----
@@ -138,24 +160,42 @@ func transcribe(config: TranscribeConfig) throws {
         let sysYap = try JSONDecoder().decode(YapTranscript.self, from: sysData)
         let micYap = try JSONDecoder().decode(YapTranscript.self, from: micData)
 
-        let merged = mergeTranscripts(system: sysYap, mic: micYap, ratio: ratio)
+        let merged = mergeTranscripts(system: sysYap, mic: micYap, ratio: ratio, anchors: anchors)
         let mergedData = try JSONEncoder().encode(merged)
         try mergedData.write(to: URL(fileURLWithPath: mergedJsonPath))
     } else if sysExists {
         try FileManager.default.copyItem(atPath: sysJsonPath, toPath: mergedJsonPath)
     } else if micExists {
-        // Load mic JSON and adjust timestamps by ratio
-        let micData = try Data(contentsOf: URL(fileURLWithPath: micJsonPath))
-        var micYap = try JSONDecoder().decode(YapTranscript.self, from: micData)
-        // Adjust timestamps
-        if micYap.metadata.duration != nil { micYap.metadata.duration! *= ratio }
-        for i in micYap.segments.indices {
-            micYap.segments[i].start *= ratio
-            micYap.segments[i].end *= ratio
-            if let words = micYap.segments[i].words {
-                for j in words.indices {
-                    micYap.segments[i].words![j].start *= ratio
-                    micYap.segments[i].words![j].end *= ratio
+        // Load mic JSON and adjust timestamps
+        var micYap = try JSONDecoder().decode(YapTranscript.self, from: try Data(contentsOf: URL(fileURLWithPath: micJsonPath)))
+        if let anchors = anchors {
+            // Map mic timestamps via anchor interpolation
+            if micYap.metadata.duration != nil {
+                micYap.metadata.duration! = anchors.micTimeToWall(micYap.metadata.duration!) - anchors.startWallSec
+            }
+            for i in micYap.segments.indices {
+                let newStart = anchors.micTimeToWall(micYap.segments[i].start) - anchors.startWallSec
+                let newEnd = anchors.micTimeToWall(micYap.segments[i].end) - anchors.startWallSec
+                micYap.segments[i].start = newStart
+                micYap.segments[i].end = newEnd
+                if let words = micYap.segments[i].words {
+                    for j in words.indices {
+                        micYap.segments[i].words![j].start = anchors.micTimeToWall(micYap.segments[i].words![j].start) - anchors.startWallSec
+                        micYap.segments[i].words![j].end = anchors.micTimeToWall(micYap.segments[i].words![j].end) - anchors.startWallSec
+                    }
+                }
+            }
+        } else {
+            // Fallback: adjust by ratio
+            if micYap.metadata.duration != nil { micYap.metadata.duration! *= ratio }
+            for i in micYap.segments.indices {
+                micYap.segments[i].start *= ratio
+                micYap.segments[i].end *= ratio
+                if let words = micYap.segments[i].words {
+                    for j in words.indices {
+                        micYap.segments[i].words![j].start *= ratio
+                        micYap.segments[i].words![j].end *= ratio
+                    }
                 }
             }
         }
@@ -165,7 +205,7 @@ func transcribe(config: TranscribeConfig) throws {
 
     // ---- Phase 4: format output ----
     let mergedData = try Data(contentsOf: URL(fileURLWithPath: mergedJsonPath))
-    try formatOutput(data: mergedData, config: config, ratio: ratio)
+    try formatOutput(data: mergedData, config: config, ratio: ratio, anchors: anchors)
 }
 
 // MARK: - Yap subprocess
@@ -198,11 +238,17 @@ private func runYap(input: String, output: String, locale: String?) throws {
 
 // MARK: - Merge logic
 
-private func mergeTranscripts(system sys: YapTranscript, mic: YapTranscript, ratio: Double) -> MergedResult {
+private func mergeTranscripts(system sys: YapTranscript, mic: YapTranscript, ratio: Double, anchors: TimeAnchorSet? = nil) -> MergedResult {
     let created = sys.metadata.created
-    let sysDuration = sys.metadata.duration ?? 0
-    let micDurationAdjusted = (mic.metadata.duration ?? 0) * ratio
-    let duration = max(sysDuration, micDurationAdjusted)
+    let duration: Double
+    if let anchors = anchors {
+        // Use wall-clock duration from anchors when available
+        duration = anchors.duration
+    } else {
+        let sysDuration = sys.metadata.duration ?? 0
+        let micDurationAdjusted = (mic.metadata.duration ?? 0) * ratio
+        duration = max(sysDuration, micDurationAdjusted)
+    }
     let language: String
     if let lang = sys.metadata.language, !lang.isEmpty {
         language = lang
@@ -214,21 +260,39 @@ private func mergeTranscripts(system sys: YapTranscript, mic: YapTranscript, rat
 
     // System segments get "System" speaker
     for seg in sys.segments {
-        segments.append(MergedSegment(
-            id: 0, start: seg.start, end: seg.end,
-            speaker: "System", text: seg.text
-        ))
+        if let anchors = anchors {
+            let newStart = anchors.systemTimeToWall(seg.start) - anchors.startWallSec
+            let newEnd = anchors.systemTimeToWall(seg.end) - anchors.startWallSec
+            segments.append(MergedSegment(
+                id: 0, start: newStart, end: newEnd,
+                speaker: "System", text: seg.text
+            ))
+        } else {
+            segments.append(MergedSegment(
+                id: 0, start: seg.start, end: seg.end,
+                speaker: "System", text: seg.text
+            ))
+        }
     }
 
     // Mic segments get "Mic" speaker with adjusted timestamps
     for seg in mic.segments {
-        segments.append(MergedSegment(
-            id: 0,
-            start: seg.start * ratio,
-            end: seg.end * ratio,
-            speaker: "Mic",
-            text: seg.text
-        ))
+        if let anchors = anchors {
+            let newStart = anchors.micTimeToWall(seg.start) - anchors.startWallSec
+            let newEnd = anchors.micTimeToWall(seg.end) - anchors.startWallSec
+            segments.append(MergedSegment(
+                id: 0, start: newStart, end: newEnd,
+                speaker: "Mic", text: seg.text
+            ))
+        } else {
+            segments.append(MergedSegment(
+                id: 0,
+                start: seg.start * ratio,
+                end: seg.end * ratio,
+                speaker: "Mic",
+                text: seg.text
+            ))
+        }
     }
 
     // Sort by start time, reassign IDs
@@ -250,7 +314,7 @@ private func mergeTranscripts(system sys: YapTranscript, mic: YapTranscript, rat
 
 // MARK: - Format output
 
-private func formatOutput(data: Data, config: TranscribeConfig, ratio: Double) throws {
+private func formatOutput(data: Data, config: TranscribeConfig, ratio: Double, anchors: TimeAnchorSet? = nil) throws {
     let decoder = JSONDecoder()
 
     switch config.format {

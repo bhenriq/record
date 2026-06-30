@@ -25,6 +25,7 @@ struct StepwiseState: Codable {
     var mixWav: String
     var transcriptTxt: String
     var summaryMd: String
+    var anchorsPath: String?   // path to time-anchor JSON (added in time-anchors feature)
     var generatedTitle: String
 }
 

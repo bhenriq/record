@@ -51,6 +51,10 @@ If no speech is detected, the transcript will be empty and the
 pipeline stops before summarization. State is saved so you can
 resume with 'rec resume' after re-recording or re-transcribing.
 
+Drift between system and microphone clocks is tracked automatically
+with per-second time anchors and corrected during transcription via
+piecewise interpolation — no configuration needed.
+
 Run 'rec <subcommand> --help' for detailed help.
 """)
 }
@@ -217,10 +221,10 @@ func run() {
 // MARK: - Step functions (shared by full pipeline and stepwise resume)
 
 @available(macOS 14.2, *)
-func stepCapture(sysWav: String, micWav: String, duration: Int, interactiveMic: Bool, tempDir: String, keepTemp: inout Bool) throws {
+func stepCapture(sysWav: String, micWav: String, duration: Int, interactiveMic: Bool, tempDir: String, keepTemp: inout Bool, anchorsPath: String? = nil) throws {
     print("=== Step 1: Capture ===", to: &stderr)
     let capStatus = CaptureStatus()
-    try CaptureEngine.capture(sysWavPath: sysWav, micWavPath: micWav, duration: duration, interactiveMic: interactiveMic, status: capStatus)
+    try CaptureEngine.capture(sysWavPath: sysWav, micWavPath: micWav, duration: duration, interactiveMic: interactiveMic, status: capStatus, anchorsPath: anchorsPath)
 
     let driftPct = capStatus.driftPercent
     if driftPct > kDriftThreshold {
@@ -240,7 +244,7 @@ func stepMix(sysWav: String, micWav: String, mixWav: String, micGain: Float) thr
 }
 
 @available(macOS 14.2, *)
-func stepTranscribe(sysWav: String, micWav: String, transcriptTxt: String, locale: String?) throws {
+func stepTranscribe(sysWav: String, micWav: String, transcriptTxt: String, locale: String?, anchorsPath: String? = nil) throws {
     print("\n=== Step 3: Transcribe ===", to: &stderr)
     var trConfig = TranscribeConfig()
     trConfig.format = .txt
@@ -248,6 +252,7 @@ func stepTranscribe(sysWav: String, micWav: String, transcriptTxt: String, local
     trConfig.systemWavOverride = sysWav
     trConfig.micWavOverride = micWav
     trConfig.transcriptOverride = transcriptTxt
+    trConfig.anchorsPath = anchorsPath
     try transcribe(config: trConfig)
 }
 
@@ -423,6 +428,7 @@ func runFullPipeline(_ args: [String]) {
     let mixWav  = "\(tempDir)/mix.wav"
     let transcriptTxt = "\(tempDir)/transcript.txt"
     let summaryMd = "\(tempDir)/summary.md"
+    let anchorsPath = "\(tempDir)/\(kAnchorFileName)"
 
     // In stepwise mode, save initial state and run one step at a time.
     // The defer only fires on normal (non-stepwise) runs — stepwise cleanup
@@ -442,6 +448,7 @@ func runFullPipeline(_ args: [String]) {
             mixWav: mixWav,
             transcriptTxt: transcriptTxt,
             summaryMd: summaryMd,
+            anchorsPath: anchorsPath,
             generatedTitle: ""
         )
         do {
@@ -496,7 +503,7 @@ func runFullPipeline(_ args: [String]) {
 
     do {
         // ======== Step 1: Capture ========
-        try stepCapture(sysWav: sysWav, micWav: micWav, duration: duration, interactiveMic: interactiveMic, tempDir: tempDir, keepTemp: &currentKeepTemp)
+        try stepCapture(sysWav: sysWav, micWav: micWav, duration: duration, interactiveMic: interactiveMic, tempDir: tempDir, keepTemp: &currentKeepTemp, anchorsPath: anchorsPath)
 
         if stepwise {
             updatePidfileState(path: thePidfile, state: .done)
@@ -519,7 +526,7 @@ func runFullPipeline(_ args: [String]) {
         updatePidfileState(path: thePidfile, state: .transcribing)
 
         // ======== Step 3: Transcribe ========
-        try stepTranscribe(sysWav: sysWav, micWav: micWav, transcriptTxt: transcriptTxt, locale: locale)
+        try stepTranscribe(sysWav: sysWav, micWav: micWav, transcriptTxt: transcriptTxt, locale: locale, anchorsPath: anchorsPath)
 
         // ======== Check for empty transcript ========
         if isTranscriptEmpty(transcriptTxt) {
@@ -541,6 +548,7 @@ func runFullPipeline(_ args: [String]) {
                 mixWav: mixWav,
                 transcriptTxt: transcriptTxt,
                 summaryMd: summaryMd,
+                anchorsPath: anchorsPath,
                 generatedTitle: ""
             )
             try saveStepwiseState(savedState, session: session)
@@ -628,7 +636,7 @@ Examples:
         case -1:
             // Run capture
             var keepTemp = state.keepTemp
-            try stepCapture(sysWav: state.sysWav, micWav: state.micWav, duration: state.duration, interactiveMic: state.interactiveMic, tempDir: state.tempDir, keepTemp: &keepTemp)
+            try stepCapture(sysWav: state.sysWav, micWav: state.micWav, duration: state.duration, interactiveMic: state.interactiveMic, tempDir: state.tempDir, keepTemp: &keepTemp, anchorsPath: state.anchorsPath)
             state.step = 0
             state.keepTemp = keepTemp
             try saveStepwiseState(state, session: session)
@@ -645,7 +653,7 @@ Examples:
 
         case 1:
             // Run transcribe
-            try stepTranscribe(sysWav: state.sysWav, micWav: state.micWav, transcriptTxt: state.transcriptTxt, locale: state.locale)
+            try stepTranscribe(sysWav: state.sysWav, micWav: state.micWav, transcriptTxt: state.transcriptTxt, locale: state.locale, anchorsPath: state.anchorsPath)
             state.step = 2
             try saveStepwiseState(state, session: session)
             print("✓ Step 3/4: Transcribe complete.", to: &stderr)
@@ -852,6 +860,10 @@ Usage: rec transcribe [options] <sys.wav> <mic.wav> <out>
 Transcribes system and mic WAVs independently using yap, then merges
 segments chronologically with speaker labels (Me / Them).
 
+Drift correction uses per-second time anchors (from `anchors.json`)
+when available in the same directory as the WAV files, falling back
+to a WAV-duration ratio otherwise.
+
 Output format is inferred from the output file extension:
   .txt → plain text   .srt → SubRip   .vtt → WebVTT   .json → JSON
 
@@ -885,11 +897,11 @@ Examples:
 
     var config = TranscribeConfig()
     config.format = format
-    
     config.locale = locale
     config.systemWavOverride = sysWav
     config.micWavOverride = micWav
     config.transcriptOverride = outPath
+    // No anchors path for standalone `rec transcribe` — user would need to provide one
 
     do {
         try transcribe(config: config)

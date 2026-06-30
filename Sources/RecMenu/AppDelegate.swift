@@ -11,31 +11,6 @@ import AppKit
 import Foundation
 import UserNotifications
 
-// MARK: - Debug log
-
-private let debugLogURL = URL(fileURLWithPath: "\(NSHomeDirectory())/.rec/debug.log")
-
-private let dateFmt: DateFormatter = {
-    let f = DateFormatter()
-    f.dateFormat = "HH:mm:ss.SSS"
-    return f
-}()
-
-private func debugLog(_ message: String) {
-    let line = "\(dateFmt.string(from: Date())) [RecMenu] \(message)\n"
-    if let data = line.data(using: .utf8) {
-        if FileManager.default.fileExists(atPath: debugLogURL.path) {
-            if let fh = try? FileHandle(forWritingTo: debugLogURL) {
-                fh.seekToEndOfFile()
-                fh.write(data)
-                fh.closeFile()
-            }
-        } else {
-            try? data.write(to: debugLogURL)
-        }
-    }
-}
-
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -56,10 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Debug log to file
-        debugLog("applicationDidFinishLaunching")
-        debugLog("recBinaryPath=\(String(describing: controller.recBinaryPathDebug))")
-        debugLog("pidfilePath=\(controller.pidfilePathDebug)")
+
         
         // Request notification permissions (for orphan adoption alerts)
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
@@ -112,7 +84,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Actions
 
     @objc private func toggleRecording() {
-        debugLog("toggleRecording: state=\(controller.state)")
+
         switch controller.state {
         case .idle:
             controller.start()
@@ -131,7 +103,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - State handling
 
     private func handleStateChange(_ state: RecState) {
-        debugLog("handleStateChange => \(state)")
+
         currentState = state
         updateIcon(state: state)
 

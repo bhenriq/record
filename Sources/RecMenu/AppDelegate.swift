@@ -4,10 +4,14 @@
 //   - Shows a status dot (gray idle, red recording, orange processing)
 //   - Click toggles recording on/off
 //   - Polls rec's pidfile for real-time status
+//   - Requests microphone and screen-recording permissions on first launch
 //
-// Built with AppKit — no external dependencies beyond macOS SDK.
+// All dependencies are built-in macOS frameworks (AppKit, AVFoundation,
+// CoreGraphics, UserNotifications). No third-party dependencies.
 
 import AppKit
+import AVFoundation
+import CoreGraphics
 import Foundation
 import UserNotifications
 
@@ -86,6 +90,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // --- Check for orphaned recording on launch ---
         controller.checkForOrphaned()
+
+        // --- Proactively request permissions needed for recording ---
+        // This ensures permission prompts appear at first launch (before the
+        // user clicks "Start Recording") so there's no surprise delay later.
+
+        // Microphone: for capturing the user's voice.
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            NSLog("RecMenu: microphone access \(granted ? "granted" : "denied")")
+        }
+
+        // Screen Recording: required by CoreAudio's process tap to capture
+        // system audio from other apps (e.g. browser meetings, video calls).
+        // This triggers the system permission prompt if not already granted.
+        CGRequestScreenCaptureAccess()
 
         NSLog("RecMenu: applicationDidFinishLaunching complete, isActive=\(controller.state.isActive)")
     }

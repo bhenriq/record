@@ -8,6 +8,11 @@
 # When --install is given without a path, installs to ~/Applications/.
 # For system-wide install, use: sudo ./setup.sh install --include-menu
 #
+# The generated Info.plist includes:
+#   - NSMicrophoneUsageDescription  (for microphone recording)
+#   - NSScreenCaptureDescription    (for system audio via process tap)
+#   - NSAudioInputDescription       (for audio input access)
+#
 # Uses a temporary scratch path to avoid permission issues in .build/
 # (which may have root-owned leftovers from sudo builds).
 
@@ -79,6 +84,10 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Rec needs microphone access to start recordings</string>
+    <key>NSScreenCaptureDescription</key>
+    <string>Rec needs screen recording permission to capture system audio from other apps (e.g. browser meetings, video calls)</string>
+    <key>NSAudioInputDescription</key>
+    <string>Rec needs audio input access to capture system audio from other apps</string>
 </dict>
 </plist>
 EOF

@@ -251,9 +251,26 @@ frame counts, which assumes constant uniform drift.
 
 ## Permissions
 
-macOS may prompt for **Audio Capture** permission the first time you run
-the tool (System Settings → Privacy & Security → Audio Capture).
-For microphone recording, macOS will also prompt for **Microphone** access.
+### CLI (`rec`)
+
+When running from the terminal, macOS may prompt for:
+- **Audio Capture** — System Settings → Privacy & Security → Audio Capture
+- **Microphone** — System Settings → Privacy & Security → Microphone
+
+If the terminal emulator (Terminal.app, iTerm2, etc.) already has these
+permissions, they are inherited by subprocesses.
+
+### Menu bar app (`Rec.app`)
+
+On first launch, Rec.app proactively requests:
+- **Microphone** — for capturing your voice (uses `AVCaptureDevice.requestAccess`)
+- **Screen Recording** — required by CoreAudio's process tap to capture system
+audio from other apps (uses `CGRequestScreenCaptureAccess`)
+  System Settings → Privacy & Security → Screen Recording → toggle **Rec** on
+
+Granting both is necessary for full stereo recordings (mic left, system right).
+If Screen Recording is denied, the microphone channel will still record but the
+system audio channel will be silent.
 
 ## Speaker labels
 
@@ -315,15 +332,18 @@ appear in the menu bar (no Dock icon).
 ### How it works
 
 The menu bar app:
-1. Locates the `rec` binary on your PATH or at common install locations
+1. **On first launch**, proactively requests **Microphone** and **Screen
+   Recording** permissions so all prompts appear upfront (before the user
+   clicks "Start Recording").
+2. Locates the `rec` binary on your PATH or at common install locations
    (prefers system-wide `/usr/local/bin/rec` over user-local paths).
-2. When you click **Start**, it launches `rec` with `--pidfile` to write a
+3. When you click **Start**, it launches `rec` with `--pidfile` to write a
    JSON status file to `~/.rec/current.json`.
-3. It polls that pidfile every 0.5s to update the icon (capturing → mixing →
+4. It polls that pidfile every 0.5s to update the icon (capturing → mixing →
    transcribing → summarizing → done).
-4. When you click **Stop**, it sends SIGINT to `rec`, which gracefully stops
+5. When you click **Stop**, it sends SIGINT to `rec`, which gracefully stops
    capture and continues the pipeline (mix → transcribe → summarize).
-5. On launch, it checks for orphaned pidfiles and re-attaches if `rec` is
+6. On launch, it checks for orphaned pidfiles and re-attaches if `rec` is
    still running.
 
 ### Diagnostics
@@ -346,6 +366,9 @@ If the icon shows an error state or recordings don't produce output:
 - Verify `yap` is installed (`brew install yap`) — the menu bar app
   sets `PATH` to include Homebrew binaries, but if `yap` is missing,
   transcription will fail.
+- If **system audio** is silent but the microphone works, check that
+  **Screen Recording** permission is granted to Rec.app in
+  System Settings → Privacy & Security → Screen Recording.
 - Run `rec` from the terminal to see full error output.
 
 ## License

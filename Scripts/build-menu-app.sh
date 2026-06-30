@@ -6,6 +6,7 @@
 #   ./Scripts/build-menu-app.sh --install [path]   # build + install to path
 #
 # When --install is given without a path, installs to ~/Applications/.
+# For system-wide install, use: sudo ./setup.sh install --include-menu
 #
 # Uses a temporary scratch path to avoid permission issues in .build/
 # (which may have root-owned leftovers from sudo builds).

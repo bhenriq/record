@@ -224,7 +224,7 @@ Sources/
 A lightweight menu bar companion that lets you start and stop `rec` recordings
 with a single click. The icon shows:
 - **Gray dot** — idle (no recording)
-- **Red dot (pulsing)** — recording in progress
+- **Red dot** — recording in progress (solid dark red, no animation)
 - **Orange dot** — processing (mixing / transcribing / summarizing)
 - **Brown dot with !** — error
 
@@ -247,7 +247,8 @@ appear in the menu bar (no Dock icon).
 ### How it works
 
 The menu bar app:
-1. Locates the `rec` binary on your PATH or at common install locations.
+1. Locates the `rec` binary on your PATH or at common install locations
+   (prefers system-wide `/usr/local/bin/rec` over user-local paths).
 2. When you click **Start**, it launches `rec` with `--pidfile` to write a
    JSON status file to `~/.rec/current.json`.
 3. It polls that pidfile every 0.5s to update the icon (capturing → mixing →
@@ -257,11 +258,26 @@ The menu bar app:
 5. On launch, it checks for orphaned pidfiles and re-attaches if `rec` is
    still running.
 
+### Diagnostics
+
+The menu bar app writes a detailed lifecycle log to `~/.rec/controller.log`
+with millisecond timestamps showing state transitions, start/stop events,
+pidfile polls, and the rec subprocess's stderr output. This is useful for
+debugging issues.
+
+```sh
+cat ~/.rec/controller.log
+cat ~/.rec/current.json       # latest pidfile state
+```
+
 ### Troubleshooting
 
-If the icon shows an error state:
-- Make sure `rec` is installed and on your PATH.
-- Check `~/.rec/current.json` for error details.
+If the icon shows an error state or recordings don't produce output:
+- Make sure `rec` is installed and on your PATH (`which rec`).
+- Check `~/.rec/controller.log` for lifecycle details.
+- Verify `yap` is installed (`brew install yap`) — the menu bar app
+  sets `PATH` to include Homebrew binaries, but if `yap` is missing,
+  transcription will fail.
 - Run `rec` from the terminal to see full error output.
 
 ## License

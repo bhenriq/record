@@ -41,10 +41,23 @@ All other dependencies are built-in macOS frameworks (CoreAudio, AudioToolbox, A
 ```sh
 swift build -c release
 # binary is at .build/release/rec
+```
 
-# Build the menu bar app:
-swift build -c release --product RecMenu
-./Scripts/build-menu-app.sh
+### Menu Bar App
+
+Build and install the menu bar companion by adding `--include-menu`:
+
+```sh
+./setup.sh build --include-menu       # build rec CLI + Rec.app
+./setup.sh install --include-menu      # build + install both
+```
+
+`Rec.app` is installed to `/Applications/`. Launch from Spotlight as **Rec**.
+
+If you get permission errors, re-run with `sudo`:
+
+```sh
+sudo ./setup.sh install --include-menu
 ```
 
 ## Usage
@@ -218,14 +231,17 @@ with a single click. The icon shows:
 ### Build & Install
 
 ```sh
-# Build the menu bar app and install to ~/Applications/
-./Scripts/build-menu-app.sh --install
+# Build + install both CLI and menu bar app:
+sudo ./setup.sh install --include-menu
 
-# Or just build the .app bundle in .build/
+# Or build the .app bundle without installing:
+./setup.sh build --include-menu
+
+# Or use the script directly:
 ./Scripts/build-menu-app.sh
 ```
 
-Then launch **RecMenu** from Spotlight or `~/Applications/`. It will
+Then launch **Rec** from Spotlight or `/Applications/`. It will
 appear in the menu bar (no Dock icon).
 
 ### How it works

@@ -53,6 +53,8 @@ class RecController {
     private let pidfilePath: String
     private let recBinaryPath: String?
     private var startTime: Date?
+    /// PID from pidfile — used to stop orphaned recordings where process is nil
+    private var trackedPID: pid_t?
 
     // MARK: - Init
 
@@ -87,6 +89,7 @@ class RecController {
         do {
             try proc.run()
             process = proc
+            trackedPID = proc.processIdentifier
             state = .recording
             startPidfileWatcher()
         } catch {
@@ -98,14 +101,26 @@ class RecController {
     func stop() {
         switch state {
         case .recording:
-            process?.interrupt() // SIGINT → graceful stop, pipeline continues
-            // Don't change state — pidfile watcher will pick up processing/done
+            // Try graceful interrupt via Process first
+            process?.interrupt()
+            
+            // If process is nil (orphaned recording), use the PID from pidfile
+            if process == nil, let pid = trackedPID {
+                kill(pid, SIGINT)
+            }
+            
         case .processing:
-            // Still processing — can't stop gracefully, but we can kill
-            process?.terminate() // SIGTERM
+            process?.terminate()
+            if process == nil, let pid = trackedPID {
+                kill(pid, SIGTERM)
+            }
             cleanup()
+            state = .idle
+            
         case .error:
             cleanup()
+            state = .idle
+            
         case .idle:
             break
         }
@@ -134,6 +149,7 @@ class RecController {
         if kill(pidfile.pid, 0) == 0 {
             // Process is alive — adopt it
             startTime = pidfile.startTime
+            trackedPID = pidfile.pid
             state = .recording
             startPidfileWatcher()
             // Notify user via UserNotifications
@@ -173,6 +189,9 @@ class RecController {
             return
         }
 
+        // Keep track of the PID so we can stop even if the Process object is lost
+        trackedPID = pidfile.pid
+
         switch pidfile.state {
         case "capturing":
             if state != .recording {
@@ -198,8 +217,6 @@ class RecController {
 
         case "error":
             state = .error(pidfile.errorMessage ?? "rec pipeline error")
-            // Don't clean up yet — let user see the error
-            // Clean up after a delay or on next action
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
                 self?.cleanup()
                 if case .error = self?.state {
@@ -226,6 +243,7 @@ class RecController {
         elapsedTimer?.invalidate()
         elapsedTimer = nil
         process = nil
+        trackedPID = nil
         startTime = nil
     }
 
@@ -233,11 +251,14 @@ class RecController {
 
     /// Find the `rec` binary by checking common paths and $PATH.
     private static func findRecBinary() -> String? {
+        // First check user-local paths (development builds)
         let candidates = [
-            "/usr/local/bin/rec",
-            "/opt/homebrew/bin/rec",
             "\(NSHomeDirectory())/.local/bin/rec",
             "\(NSHomeDirectory())/bin/rec",
+            "\(NSHomeDirectory())/Documents/Recordings/.build/release/rec",
+            // Then system paths
+            "/usr/local/bin/rec",
+            "/opt/homebrew/bin/rec",
             "\(NSHomeDirectory())/.brew/bin/rec",
         ]
         for path in candidates {

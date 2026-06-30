@@ -176,13 +176,15 @@ class RecController {
     func startElapsedTimer(callback: @escaping (String) -> Void) {
         elapsedCallback = callback
         elapsedTimer?.invalidate()
-        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        elapsedTimer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self, let start = self.startTime else { return }
             let elapsed = Date().timeIntervalSince(start)
             let m = Int(elapsed) / 60
             let s = Int(elapsed) % 60
             callback(String(format: "%02d:%02d", m, s))
         }
+        // Use .common mode so the timer fires even while the menu is open
+        RunLoop.main.add(elapsedTimer!, forMode: .common)
     }
 
     /// Check if there's an orphaned recording from a previous launch.

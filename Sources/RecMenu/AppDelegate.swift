@@ -24,6 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var toggleMenuItem: NSMenuItem!
     private var statusMenuItem: NSMenuItem!
     private var elapsedMenuItem: NSMenuItem!
+    private var elapsedTextField: NSTextField!
 
     // Current state
     private var currentState: RecState = .idle
@@ -46,9 +47,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenuItem.isEnabled = false
         menu.addItem(statusMenuItem)
 
+        // Custom view for live-updating elapsed time inside the menu
+        let elapsedView = NSView(frame: NSRect(x: 0, y: 0, width: 120, height: 22))
+        elapsedTextField = NSTextField(labelWithString: "00:00")
+        elapsedTextField.frame = NSRect(x: 15, y: 2, width: 90, height: 18)
+        elapsedTextField.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        elapsedTextField.textColor = NSColor.secondaryLabelColor
+        elapsedView.addSubview(elapsedTextField)
         elapsedMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         elapsedMenuItem.isEnabled = false
         elapsedMenuItem.isHidden = true
+        elapsedMenuItem.view = elapsedView
         menu.addItem(elapsedMenuItem)
 
         menu.addItem(NSMenuItem.separator())
@@ -118,7 +127,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             toggleMenuItem.title = "Stop Recording"
             elapsedMenuItem.isHidden = false
             controller.startElapsedTimer { [weak self] elapsed in
-                self?.elapsedMenuItem.title = elapsed
+                guard let self = self else { return }
+                self.elapsedTextField.stringValue = elapsed
             }
 
         case .processing(let step):

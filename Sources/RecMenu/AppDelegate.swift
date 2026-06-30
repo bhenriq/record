@@ -53,12 +53,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
 
         toggleMenuItem = NSMenuItem(title: "Start Recording", action: #selector(toggleRecording), keyEquivalent: "r")
+        toggleMenuItem.target = self
         toggleMenuItem.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(toggleMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        menu.addItem(NSMenuItem(title: "Open Recordings Folder…", action: #selector(openRecordingsFolder), keyEquivalent: "o"))
+        let openItem = NSMenuItem(title: "Open Recordings Folder…", action: #selector(openRecordingsFolder), keyEquivalent: "o")
+        openItem.target = self
+        menu.addItem(openItem)
 
         menu.addItem(NSMenuItem.separator())
 

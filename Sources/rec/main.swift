@@ -248,12 +248,7 @@ func stepTranscribe(sysWav: String, micWav: String, transcriptTxt: String, local
     trConfig.systemWavOverride = sysWav
     trConfig.micWavOverride = micWav
     trConfig.transcriptOverride = transcriptTxt
-    do {
-        try transcribe(config: trConfig)
-    } catch {
-        print("Transcription failed: \(error)", to: &stderr)
-        print("  Install yap: brew install yap", to: &stderr)
-    }
+    try transcribe(config: trConfig)
 }
 
 /// Check if the transcript file is empty (no speech detected).

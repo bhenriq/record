@@ -4,6 +4,30 @@ import AppKit
 import Foundation
 import UserNotifications
 
+// MARK: - Debug log
+
+private let controllerLogURL = URL(fileURLWithPath: "\(NSHomeDirectory())/.rec/controller.log")
+private let dateFmt: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm:ss.SSS"
+    return f
+}()
+
+private func clog(_ message: String) {
+    let line = "\(dateFmt.string(from: Date())) \(message)\n"
+    if let data = line.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: controllerLogURL.path) {
+            if let fh = try? FileHandle(forWritingTo: controllerLogURL) {
+                fh.seekToEndOfFile()
+                fh.write(data)
+                fh.closeFile()
+            }
+        } else {
+            try? data.write(to: controllerLogURL)
+        }
+    }
+}
+
 // MARK: - Pidfile type (mirrors rec's RecPidfile)
 
 private struct RecPidfileStatus: Codable {
@@ -39,6 +63,7 @@ class RecController {
     private(set) var state: State = .idle {
         didSet {
             guard oldValue != state else { return }
+            clog("state \(oldValue) -> \(state)")
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.onStateChange?(self.state.toRecState())
@@ -82,37 +107,56 @@ class RecController {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
         proc.arguments = ["--pidfile", pidfilePath]
+        // Ensure Homebrew binaries are on PATH (yap etc.)
+        var env = ProcessInfo.processInfo.environment
+        if let existingPath = env["PATH"] {
+            env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:\(existingPath)"
+        } else {
+            env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        }
+        proc.environment = env
         proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
+        // Capture rec stderr for debugging
+        let stderrPath = "\(NSHomeDirectory())/.rec/rec-stderr.log"
+        if !FileManager.default.fileExists(atPath: stderrPath) {
+            FileManager.default.createFile(atPath: stderrPath, contents: nil)
+        }
+        if let stderrFH = FileHandle(forWritingAtPath: stderrPath) {
+            stderrFH.seekToEndOfFile()
+            proc.standardError = stderrFH
+            clog("rec stderr -> \(stderrPath)")
+        } else {
+            proc.standardError = FileHandle.nullDevice
+        }
         proc.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async {
                 self?.handleTermination()
             }
         }
 
+        clog("starting rec binary=\(binary) pidfile=\(pidfilePath)")
         do {
             try proc.run()
             process = proc
             trackedPID = proc.processIdentifier
+            clog("rec started PID=\(proc.processIdentifier)")
             state = .recording
             startPidfileWatcher()
         } catch {
+            clog("rec failed to start: \(error)")
             state = .error("Failed to launch rec: \(error.localizedDescription)")
         }
     }
 
     /// Stop the current recording (sends SIGINT for graceful stop).
     func stop() {
+        clog("stop called, state=\(state)")
         switch state {
         case .recording:
-            // Try graceful interrupt via Process first
             process?.interrupt()
-            
-            // If process is nil (orphaned recording), use the PID from pidfile
             if process == nil, let pid = trackedPID {
                 kill(pid, SIGINT)
             }
-            
         case .processing:
             process?.terminate()
             if process == nil, let pid = trackedPID {
@@ -120,11 +164,9 @@ class RecController {
             }
             cleanup()
             state = .idle
-            
         case .error:
             cleanup()
             state = .idle
-            
         case .idle:
             break
         }
@@ -175,6 +217,7 @@ class RecController {
     // MARK: - Private
 
     private func startPidfileWatcher() {
+        clog("starting pidfile watcher")
         pidfileTimer?.invalidate()
         pidfileTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.pollPidfile()
@@ -186,12 +229,14 @@ class RecController {
               let pidfile = try? JSONDecoder().decode(RecPidfileStatus.self, from: data)
         else {
             // Pidfile gone → pipeline finished or never started
+            clog("poll: no pidfile, active=\(state.isActive)")
             if state.isActive {
                 cleanup()
                 state = .idle
             }
             return
         }
+        clog("poll: state=\(pidfile.state)")
 
         // Keep track of the PID so we can stop even if the Process object is lost
         trackedPID = pidfile.pid
@@ -234,14 +279,17 @@ class RecController {
     }
 
     private func handleTermination() {
+        clog("handleTermination called")
         pollPidfile()
         if state.isActive {
+            clog("handleTermination: still active, cleaning up")
             cleanup()
             state = .idle
         }
     }
 
     private func cleanup() {
+        clog("cleanup called")
         pidfileTimer?.invalidate()
         pidfileTimer = nil
         elapsedTimer?.invalidate()

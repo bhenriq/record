@@ -15,8 +15,14 @@ import UserNotifications
 
 private let debugLogURL = URL(fileURLWithPath: "\(NSHomeDirectory())/.rec/debug.log")
 
+private let dateFmt: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm:ss.SSS"
+    return f
+}()
+
 private func debugLog(_ message: String) {
-    let line = "\(Date()) [RecMenu] \(message)\n"
+    let line = "\(dateFmt.string(from: Date())) [RecMenu] \(message)\n"
     if let data = line.data(using: .utf8) {
         if FileManager.default.fileExists(atPath: debugLogURL.path) {
             if let fh = try? FileHandle(forWritingTo: debugLogURL) {

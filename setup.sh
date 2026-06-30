@@ -47,7 +47,7 @@ build() {
         echo "==> Building Rec.app (menu bar)..."
         (cd "$PROJECT_DIR" && swift build -c release --product RecMenu)
         "$PROJECT_DIR/Scripts/build-menu-app.sh"
-        echo "==> Rec.app built at .build/Rec.app"
+        echo "==> Rec.app built at $PROJECT_DIR/Rec.app"
     fi
 
     echo "==> Build done."

@@ -15,13 +15,14 @@ cd "$PROJECT_DIR"
 APP_NAME="Rec"
 SPM_PRODUCT="RecMenu"
 BUNDLE_ID="com.record.rec"
-BUILD_DIR=".build"
-APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
+# Output the .app bundle next to the project root, not inside .build/
+# (which may have permission issues from sudo operations)
+APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 
 echo "==> Building $SPM_PRODUCT (release)..."
 swift build -c release --product "$SPM_PRODUCT"
 
-BINARY="$BUILD_DIR/release/$SPM_PRODUCT"
+BINARY="$PROJECT_DIR/.build/release/$SPM_PRODUCT"
 if [ ! -f "$BINARY" ]; then
     echo "Error: built binary not found at $BINARY"
     exit 1
@@ -33,6 +34,12 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 cp "$BINARY" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+
+# Copy app icon
+ICON_SRC="$PROJECT_DIR/Sources/RecMenu/Resources/AppIcon.icns"
+if [ -f "$ICON_SRC" ]; then
+    cp "$ICON_SRC" "$APP_BUNDLE/Contents/Resources/"
+fi
 
 # Create Info.plist
 cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
@@ -53,6 +60,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <string>1.0.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>

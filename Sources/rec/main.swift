@@ -51,6 +51,10 @@ If no speech is detected, the transcript will be empty and the
 pipeline stops before summarization. State is saved so you can
 resume with 'rec resume' after re-recording or re-transcribing.
 
+If summarization fails (e.g., rate limit, pi not found), the
+pipeline saves state and exits so you can retry later with
+'rec resume' — no audio or transcript data is lost.
+
 Drift between system and microphone clocks is tracked automatically
 with per-second time anchors and corrected during transcription via
 piecewise interpolation — no configuration needed.
@@ -627,6 +631,9 @@ Options:
 If the transcript is empty (no speech detected), summarization is
 skipped and the session state stays at the current step so you can
 re-record or re-transcribe, then run 'rec resume' again.
+
+If summarization fails (e.g., rate limit from pi), the state does
+not advance — run 'rec resume' again to retry.
 
 Examples:
   rec resume

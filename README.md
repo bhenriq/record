@@ -77,6 +77,10 @@ rec --pidfile ~/.rec/current.json            # write JSON status file (for menu 
 If no speech is detected, the transcript will be empty and the
 pipeline stops before summarization, saving state so you can
 resume with `rec resume` after re-recording or re-transcribing.
+
+If summarization fails (e.g., rate limit, pi not found), the
+pipeline saves state and exits — run `rec resume` to retry.
+No audio or transcript data is lost.
 ```
 
 ### Step-by-step mode
@@ -107,6 +111,9 @@ If the transcript is empty (no speech detected), summarization is
 skipped and the session state stays at the current step. Run
 `rec resume` again after re-recording or re-transcribing to
 continue.
+
+If summarization fails (e.g., rate limit from pi), the state does
+not advance — run `rec resume` again to retry.
 
 ### Subcommands
 

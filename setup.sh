@@ -5,6 +5,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_NAME="rec"
 INSTALL_DIR="/usr/local/bin"
 MENU_APP_DIR="/Applications"
+SCRATCH_DIR="${TMPDIR:-/tmp}/rec-build-$$"
 
 usage() {
     cat <<EOF
@@ -28,9 +29,13 @@ Examples:
 EOF
 }
 
+cleanup() {
+    rm -rf "$SCRATCH_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 build() {
     local include_menu=false
-    # Parse --include-menu flag
     for arg in "$@"; do
         case "$arg" in
             --include-menu) include_menu=true ;;
@@ -40,21 +45,20 @@ build() {
     echo "==> Generating commit hash..."
     local commit=$(cd "$PROJECT_DIR" && git rev-parse HEAD 2>/dev/null || echo "unknown")
     echo "public let recVersion = \"$commit\"" > "$PROJECT_DIR/Sources/rec/Version.swift"
+
     echo "==> Building rec (release)..."
-    (cd "$PROJECT_DIR" && swift build -c release)
+    (cd "$PROJECT_DIR" && swift build -c release --scratch-path "$SCRATCH_DIR")
 
     if $include_menu; then
         echo "==> Building Rec.app (menu bar)..."
-        (cd "$PROJECT_DIR" && swift build -c release --product RecMenu)
         "$PROJECT_DIR/Scripts/build-menu-app.sh"
-        echo "==> Rec.app built at $PROJECT_DIR/Rec.app"
+        echo "==> Rec.app built at ${TMPDIR:-/tmp}/Rec.app"
     fi
 
     echo "==> Build done."
 }
 
 install_bin() {
-    local src="$PROJECT_DIR/.build/release/$BIN_NAME"
     local include_menu=false
     for arg in "$@"; do
         case "$arg" in
@@ -63,6 +67,12 @@ install_bin() {
     done
 
     build "$@"
+
+    local src="$SCRATCH_DIR/release/$BIN_NAME"
+    if [ ! -f "$src" ]; then
+        echo "Error: built binary not found at $src" >&2
+        exit 1
+    fi
 
     echo "==> Installing rec to $INSTALL_DIR/$BIN_NAME..."
     if cp "$src" "$INSTALL_DIR/$BIN_NAME" 2>/dev/null; then
@@ -74,12 +84,13 @@ install_bin() {
     fi
 
     if $include_menu; then
-        local app_bundle="$PROJECT_DIR/.build/Rec.app"
+        local app_bundle="${TMPDIR:-/tmp}/Rec.app"
         if [ ! -d "$app_bundle" ]; then
             echo "Error: Rec.app not found at $app_bundle (build may have failed)" >&2
             exit 1
         fi
         echo "==> Installing Rec.app to $MENU_APP_DIR..."
+        rm -rf "$MENU_APP_DIR/Rec.app" 2>/dev/null || true
         if cp -R "$app_bundle" "$MENU_APP_DIR/" 2>/dev/null; then
             echo "==> Rec.app installed to $MENU_APP_DIR/"
         else

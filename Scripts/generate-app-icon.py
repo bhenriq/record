@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""Generate AppIcon.icns for Rec.app — a red recording dot.
+"""Generate AppIcon.icns for Rec.app — red recording dot on transparent bg.
 
 Run:  python3 Scripts/generate-app-icon.py
 Output: Sources/RecMenu/Resources/AppIcon.icns
 """
 import struct, zlib, os, sys, math, subprocess
 
-def create_png(width, height, draw_fn):
+def create_rgba_png(width, height, draw_fn):
     def make_chunk(chunk_type, data):
         c = chunk_type + data
         crc = struct.pack('>I', zlib.crc32(c) & 0xffffffff)
         return struct.pack('>I', len(data)) + c + crc
 
-    header = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
+    header = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)  # color-type 6 = RGBA
     ihdr = make_chunk(b'IHDR', header)
 
     raw = bytearray()
     for y in range(height):
         raw.append(0)
         for x in range(width):
-            r, g, b = draw_fn(x, y, width, height)
-            raw.extend([r, g, b])
+            r, g, b, a = draw_fn(x, y, width, height)
+            raw.extend([r, g, b, a])
 
     deflate = zlib.compress(bytes(raw))
     idat = make_chunk(b'IDAT', deflate)
@@ -36,10 +36,10 @@ def draw_icon(x, y, w, h):
     dist = math.sqrt(dx*dx + dy*dy)
 
     if dist > outer_r:
-        return (248, 248, 248)  # near-white background
+        return (0, 0, 0, 0)  # transparent
 
     if dist < inner_r:
-        return (230, 50, 50)  # solid bright center
+        return (235, 55, 55, 255)
 
     t = (dist - inner_r) / (outer_r - inner_r)
     t = max(0, min(1, t))
@@ -54,36 +54,35 @@ def draw_icon(x, y, w, h):
     r = int(200 * (1 - t) + 50 * t - edge_shadow * 200 + highlight * 40)
     g = int(30 * (1 - t) + 10 * t - edge_shadow * 100 + highlight * 20)
     b = int(30 * (1 - t) + 10 * t - edge_shadow * 100 + highlight * 20)
-    return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
+    return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)), 255)
 
 def main():
-    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(script_dir)
     iconset_dir = os.path.join(project_dir, '.build', 'AppIcon.iconset')
     output_path = os.path.join(project_dir, 'Sources', 'RecMenu', 'Resources', 'AppIcon.icns')
 
     os.makedirs(iconset_dir, exist_ok=True)
 
     for s in [16, 32, 64, 128, 256, 512, 1024]:
-        png_data = create_png(s, s, draw_icon)
+        png_data = create_rgba_png(s, s, draw_icon)
         with open(os.path.join(iconset_dir, f'icon_{s}x{s}.png'), 'wb') as f:
             f.write(png_data)
+        print(f'  {s}x{s}')
 
-    # Create @2x copies for the iconset
+    # Build iconset
     for s, d in [(16, 32), (32, 64), (128, 256), (256, 512), (512, 1024)]:
         src = os.path.join(iconset_dir, f'icon_{d}x{d}.png')
         dst = os.path.join(iconset_dir, f'icon_{s}x{s}@2x.png')
         if os.path.exists(src):
-            os.symlink(src, dst) if sys.platform != 'win32' else None
-
-    # Also copy explicit files for sizes that don't have @2x counterparts
-    import shutil
-    shutil.copy(
-        os.path.join(iconset_dir, 'icon_16x16.png'),
-        os.path.join(iconset_dir, 'icon_16x16.png'),
-    )
+            if os.path.exists(dst):
+                os.remove(dst)
+            os.link(src, dst)
 
     subprocess.run(['iconutil', '-c', 'icns', '-o', output_path, iconset_dir], check=True)
-    print(f"Created {output_path} ({os.path.getsize(output_path) // 1024} KB)")
+    size = os.path.getsize(output_path)
+    print(f'Created {output_path} ({size // 1024} KB)')
+    print(f'Done — rebuild and reinstall to see the icon')
 
 if __name__ == '__main__':
     main()

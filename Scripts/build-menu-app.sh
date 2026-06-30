@@ -2,10 +2,13 @@
 # build-menu-app.sh — Build Rec menu bar app and wrap it in a .app bundle
 #
 # Usage:
-#   ./Scripts/build-menu-app.sh                    # build Rec.app in .build/
+#   ./Scripts/build-menu-app.sh                    # build Rec.app to /tmp/
 #   ./Scripts/build-menu-app.sh --install [path]   # build + install to path
 #
 # When --install is given without a path, installs to ~/Applications/.
+#
+# Uses a temporary scratch path to avoid permission issues in .build/
+# (which may have root-owned leftovers from sudo builds).
 
 set -euo pipefail
 
@@ -15,27 +18,24 @@ cd "$PROJECT_DIR"
 APP_NAME="Rec"
 SPM_PRODUCT="RecMenu"
 BUNDLE_ID="com.record.rec"
-APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 
-# Clean up previous bundle (handle root-owned files from sudo builds)
-if [ -d "$APP_BUNDLE" ]; then
-    chflags -R nouchg "$APP_BUNDLE" 2>/dev/null || true
-    rm -rf "$APP_BUNDLE" 2>/dev/null || \
-        python3 -c "import os,shutil; shutil.rmtree('$APP_BUNDLE', onexc=lambda f,p,e: None)" 2>/dev/null || \
-        { echo "Warning: could not remove $APP_BUNDLE — try: sudo rm -rf '$APP_BUNDLE'"; }
-fi
+# Use a temp scratch dir to avoid root-owned artifacts in .build/
+SCRATCH_DIR="${TMPDIR:-/tmp}/rec-menu-build-$$"
+APP_BUNDLE="${TMPDIR:-/tmp}/$APP_NAME.app"
+
+# Clean up any leftover from a previous run
+rm -rf "$APP_BUNDLE" "$SCRATCH_DIR" 2>/dev/null || true
 
 echo "==> Building $SPM_PRODUCT (release)..."
-swift build -c release --product "$SPM_PRODUCT"
+swift build -c release --product "$SPM_PRODUCT" --scratch-path "$SCRATCH_DIR"
 
-BINARY="$PROJECT_DIR/.build/release/$SPM_PRODUCT"
+BINARY="$SCRATCH_DIR/release/$SPM_PRODUCT"
 if [ ! -f "$BINARY" ]; then
     echo "Error: built binary not found at $BINARY"
     exit 1
 fi
 
 echo "==> Creating .app bundle at $APP_BUNDLE..."
-rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
@@ -87,9 +87,13 @@ echo "==> Bundle created: $APP_BUNDLE"
 if [ "${1:-}" = "--install" ]; then
     INSTALL_TARGET="${2:-$HOME/Applications}"
     mkdir -p "$INSTALL_TARGET"
+    rm -rf "$INSTALL_TARGET/$APP_NAME.app"
     cp -R "$APP_BUNDLE" "$INSTALL_TARGET/"
     echo "==> Installed to $INSTALL_TARGET/$APP_NAME.app"
     echo "==> Launch from Spotlight as \"$APP_NAME\""
 fi
+
+# Clean up scratch
+rm -rf "$SCRATCH_DIR" 2>/dev/null || true
 
 echo "==> Done"

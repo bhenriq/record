@@ -51,7 +51,11 @@ class RecController {
     private var elapsedTimer: Timer?
     private var elapsedCallback: ((String) -> Void)?
     private let pidfilePath: String
+    /// Debug accessor for AppDelegate logging
+    var pidfilePathDebug: String { pidfilePath }
     private let recBinaryPath: String?
+    /// Debug accessor for AppDelegate logging
+    var recBinaryPathDebug: String? { recBinaryPath }
     private var startTime: Date?
     /// PID from pidfile — used to stop orphaned recordings where process is nil
     private var trackedPID: pid_t?

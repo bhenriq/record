@@ -11,6 +11,25 @@ import AppKit
 import Foundation
 import UserNotifications
 
+// MARK: - Debug log
+
+private let debugLogURL = URL(fileURLWithPath: "\(NSHomeDirectory())/.rec/debug.log")
+
+private func debugLog(_ message: String) {
+    let line = "\(Date()) [RecMenu] \(message)\n"
+    if let data = line.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: debugLogURL.path) {
+            if let fh = try? FileHandle(forWritingTo: debugLogURL) {
+                fh.seekToEndOfFile()
+                fh.write(data)
+                fh.closeFile()
+            }
+        } else {
+            try? data.write(to: debugLogURL)
+        }
+    }
+}
+
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -19,7 +38,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: 22)
     private let controller = RecController()
-    private var pulseTimer: Timer?
 
     // Menu items we need to update dynamically
     private var toggleMenuItem: NSMenuItem!
@@ -32,6 +50,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Debug log to file
+        debugLog("applicationDidFinishLaunching")
+        debugLog("recBinaryPath=\(String(describing: controller.recBinaryPathDebug))")
+        debugLog("pidfilePath=\(controller.pidfilePathDebug)")
+        
         // Request notification permissions (for orphan adoption alerts)
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
 
@@ -74,14 +97,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleStateChange(state)
         }
 
-        // --- Pulse timer for recording animation ---
-        pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            if case .recording = self.currentState {
-                self.updateIcon(state: self.currentState)
-            }
-        }
-
         // --- Check for orphaned recording on launch ---
         controller.checkForOrphaned()
 
@@ -91,6 +106,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Actions
 
     @objc private func toggleRecording() {
+        debugLog("toggleRecording: state=\(controller.state)")
         switch controller.state {
         case .idle:
             controller.start()
@@ -109,6 +125,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - State handling
 
     private func handleStateChange(_ state: RecState) {
+        debugLog("handleStateChange => \(state)")
         currentState = state
         updateIcon(state: state)
 
@@ -161,14 +178,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 ctx.fillEllipse(in: dotRect)
 
             case .recording:
-                // Pulse: alternate between full red and faded red
-                let isPulsePhase = (Int(Date().timeIntervalSince1970 * (2.0 / 0.6)) % 2 == 0)
-                let alpha: CGFloat = isPulsePhase ? 0.5 : 1.0
-                ctx.setFillColor(NSColor.red.withAlphaComponent(alpha).cgColor)
+                // Solid red dot — no pulse, no inner white dot
+                ctx.setFillColor(NSColor(red: 0.75, green: 0.12, blue: 0.12, alpha: 1.0).cgColor)
                 ctx.fillEllipse(in: dotRect)
-                // Inner white dot
-                ctx.setFillColor(NSColor.white.withAlphaComponent(alpha).cgColor)
-                ctx.fillEllipse(in: CGRect(x: center.x - 2, y: center.y - 2, width: 4, height: 4))
 
             case .processing:
                 ctx.setFillColor(NSColor.systemOrange.cgColor)

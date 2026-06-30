@@ -580,14 +580,11 @@ func runFullPipeline(_ args: [String]) {
 func runResume(args: [String]) {
     // Parse -S/--session from args
     var session: String?
-    var pidfilePath: String?
     var i = 0
     while i < args.count {
         switch args[i] {
         case "-S", "--session":
             session = args[safe: i + 1]; i += 2
-        case "--pidfile":
-            pidfilePath = args[safe: i + 1]; i += 2
         case "-h", "--help":
             print("""
 Usage: rec resume [options]
